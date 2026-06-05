@@ -446,7 +446,7 @@ def storage_fragment_to_markdown(fragment: str) -> str:
     for macro_tag in soup.find_all(True):
         if _is_macro_tag(macro_tag):
             macro_tag.replace_with(f"[Nested macro: {_attr(macro_tag, 'ac:name', 'name') or 'unknown'}]")
-    root = soup.body or soup
+    root = _storage_root(soup)
     html_fragment = "".join(str(child) for child in root.contents)
     return rendered_html_to_markdown(html_fragment).strip()
 
@@ -454,7 +454,7 @@ def storage_fragment_to_markdown(fragment: str) -> str:
 def plain_text(fragment: str) -> str:
     if not fragment:
         return ""
-    return _storage_soup(fragment).get_text("\n")
+    return _storage_root(_storage_soup(fragment)).get_text("\n")
 
 
 def unknown_macro(macro: MacroInstance, context: MacroContext) -> MacroRecord:
@@ -513,11 +513,15 @@ def _body(tag: Tag) -> str:
 
 def _attachment_name(raw: str) -> str | None:
     soup = _storage_soup(raw)
-    attachment = next((tag for tag in soup.find_all(True) if tag.name.endswith("attachment")), None)
+    attachment = next((tag for tag in _storage_root(soup).find_all(True) if tag.name.endswith("attachment")), None)
     if not attachment:
         return None
     return _attr(attachment, "ri:filename", "filename")
 
 
 def _storage_soup(fragment: str) -> BeautifulSoup:
-    return BeautifulSoup(fragment, "lxml")
+    return BeautifulSoup(f"<pull-root>{fragment}</pull-root>", "xml")
+
+
+def _storage_root(soup: BeautifulSoup) -> Tag | BeautifulSoup:
+    return soup.find("pull-root") or soup.body or soup
