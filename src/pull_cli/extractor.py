@@ -11,7 +11,7 @@ from .links import rewrite_html_links
 from .macros import MacroContext, MacroRegistry
 from .markdown_writer import rendered_html_to_markdown
 from .models import ExtractionResult, PageArtifact, PageSummary, PullOptions
-from .paths import slugify
+from .paths import relative_path, slugify
 from .writer import (
     page_markdown_header,
     prepare_output_dir,
@@ -62,7 +62,10 @@ def extract(
         source_path = f"{page_dir}/source.storage.xml" if options.write_source and page.body_storage else None
         page_json = f"{page_dir}/page.json"
         rendered = _select_rendered_body(page.body_view, page.body_export_view, page.body_storage)
-        normalized_html, html_warnings = normalize_html(rendered, source_page_id=page.page_id)
+        normalized_html, html_warnings = normalize_html(
+            rendered,
+            source_page_id=page.page_id,
+        )
         attachments = client.list_attachments(page.page_id)
         candidates = discover_asset_candidates(
             normalized_html,
@@ -89,6 +92,14 @@ def extract(
             assets=assets,
             rewrite_links=options.rewrite_links,
         )
+        if options.redact_manifest or options.redact_source_urls:
+            _redact_links(links, redact_source_urls=options.redact_source_urls)
+        if options.redact_source_urls:
+            rewritten_html, _redaction_warnings = normalize_html(
+                rewritten_html,
+                source_page_id=page.page_id,
+                redact_source_urls=True,
+            )
         macro_context = MacroContext(
             page_id=page.page_id,
             attachments=attachments,
@@ -99,6 +110,9 @@ def extract(
         _enforce_strict_macros(macros, options=options)
         macro_warnings = [warning for macro in macros for warning in macro.warnings]
         visible_markdown = rendered_html_to_markdown(rewritten_html)
+        attachment_markdown = _attachment_markdown(assets, page_index_path=index_md)
+        if attachment_markdown:
+            visible_markdown = visible_markdown.rstrip() + "\n\n" + attachment_markdown + "\n"
         macro_markdown = _macro_recovery_markdown(macros)
         artifact = PageArtifact(
             page=page,
@@ -156,6 +170,51 @@ def _select_rendered_body(view: str | None, export_view: str | None, storage: st
 def _macro_recovery_markdown(macros) -> str:
     blocks = [macro.markdown.strip() for macro in macros if macro.markdown and macro.status != "ignored"]
     return "\n\n".join(block for block in blocks if block)
+
+
+def _attachment_markdown(assets, *, page_index_path: str) -> str:
+    rows = []
+    for asset in assets:
+        if asset.attachment_id:
+            asset_link = relative_path(page_index_path, asset.local_path)
+            sidecars = (
+                ", ".join(
+                    f"`{sidecar}` ([open]({relative_path(page_index_path, sidecar)}))"
+                    for sidecar in asset.sidecars
+                )
+                or ""
+            )
+            rows.append(
+                "| "
+                + " | ".join(
+                    [
+                        asset.filename,
+                        f"`{asset.local_path}` ([open]({asset_link}))",
+                        asset.media_type or "",
+                        sidecars,
+                    ]
+                )
+                + " |"
+            )
+    if not rows:
+        return ""
+    return "\n".join(
+        [
+            "## Attachments",
+            "",
+            "| Filename | Local path | Media type | Extracted sidecars |",
+            "| --- | --- | --- | --- |",
+            *rows,
+        ]
+    )
+
+
+def _redact_links(links, *, redact_source_urls: bool) -> None:
+    from .security import redact_text, sanitize_url
+
+    for link in links:
+        link.original = sanitize_url(link.original, redact_source_url=redact_source_urls) or redact_text(link.original)
+        link.normalized = sanitize_url(link.normalized, redact_source_url=redact_source_urls) or redact_text(link.normalized)
 
 
 def _enforce_strict_macros(macros, *, options: PullOptions) -> None:

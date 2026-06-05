@@ -7,15 +7,37 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+from . import __version__
 from .clients import build_client
 from .config import resolve_config
 from .envelope import emit_json, make_envelope, wants_json
-from .errors import EXIT_INTERNAL, EXIT_SUCCESS, PullError
+from .errors import EXIT_INTERNAL, EXIT_SUCCESS, EXIT_VALIDATION, PullError
 from .extractor import extract
 from .guide import guide_payload
 from .models import PullOptions, TargetSelection
 from .resolver import resolve_target
+from .security import sanitize_url
 from .validator import validate_package
+
+
+class PullArgumentParser(argparse.ArgumentParser):
+    def __init__(self, *args, json_mode: bool = False, command: str = "pull", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.json_mode = json_mode
+        self.command = command
+
+    def error(self, message: str) -> None:
+        if self.json_mode:
+            error = PullError(
+                code="ERR_VALIDATION_INVALID_ARGUMENT",
+                message=message,
+                exit_code=EXIT_VALIDATION,
+                suggested_action="Run pull --help or pull guide --json for valid arguments.",
+                details={"argument_error": message},
+            )
+            emit_json(make_envelope(ok=False, command=self.command, errors=[error]))
+            raise SystemExit(EXIT_VALIDATION)
+        super().error(message)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -25,9 +47,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _main_validate(args[1:])
         if args and args[0] == "guide":
             return _main_guide(args[1:])
+        if args and args[0] == "version":
+            print(f"pull-cli {__version__}")
+            return EXIT_SUCCESS
         return _main_pull(args)
     except PullError as exc:
-        emit_json(make_envelope(ok=False, command="pull", errors=[exc]))
+        if _argv_wants_json(args):
+            emit_json(make_envelope(ok=False, command="pull", errors=[exc]))
+        else:
+            print(f"{exc.code}: {exc.message}", file=sys.stderr)
+            if exc.suggested_action:
+                print(f"Suggested action: {exc.suggested_action}", file=sys.stderr)
         return exc.exit_code
     except KeyboardInterrupt:
         return 130
@@ -38,12 +68,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             exit_code=EXIT_INTERNAL,
             details={"reason": str(exc)},
         )
-        emit_json(make_envelope(ok=False, command="pull", errors=[error]))
+        if _argv_wants_json(args):
+            emit_json(make_envelope(ok=False, command="pull", errors=[error]))
+        else:
+            print(f"{error.code}: {error.message}", file=sys.stderr)
         return EXIT_INTERNAL
 
 
 def _main_pull(argv: Sequence[str]) -> int:
-    parser = _pull_parser()
+    parser = _pull_parser(json_mode=_argv_wants_json(argv))
     ns = parser.parse_args(argv)
     json_mode = wants_json(ns.json)
     started = time.perf_counter()
@@ -102,7 +135,10 @@ def _main_pull(argv: Sequence[str]) -> int:
         command="pull",
         target={
             "page_id": result.pages[0].page.page_id if result.pages else root.page_id,
-            "url": result.pages[0].page.url if result.pages else root.url,
+            "url": sanitize_url(
+                result.pages[0].page.url if result.pages else root.url,
+                redact_source_url=options.redact_source_urls,
+            ),
         },
         result={
             "output_dir": str(result.output_dir),
@@ -126,10 +162,30 @@ def _main_pull(argv: Sequence[str]) -> int:
 
 
 def _main_validate(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="pull validate", description="Validate a pulled Confluence package.")
-    parser.add_argument("path", metavar="MANIFEST_OR_OUTPUT_DIR")
+    parser = PullArgumentParser(
+        prog="pull validate",
+        description="Validate a pulled Confluence package.",
+        json_mode=_argv_wants_json(argv),
+        command="validate",
+    )
+    parser.add_argument("path", nargs="?", metavar="MANIFEST_OR_OUTPUT_DIR")
     parser.add_argument("--json", action="store_true", help="Emit a structured JSON envelope.")
     ns = parser.parse_args(argv)
+    json_mode = wants_json(ns.json)
+    if not ns.path:
+        error = PullError(
+            code="ERR_VALIDATION_REQUIRED",
+            message="Missing required MANIFEST_OR_OUTPUT_DIR argument.",
+            exit_code=EXIT_VALIDATION,
+            suggested_action="Pass an output directory or manifest.yaml path.",
+        )
+        payload = make_envelope(ok=False, command="validate", target={}, errors=[error])
+        if json_mode:
+            emit_json(payload)
+        else:
+            print(f"{error.code}: {error.message}", file=sys.stderr)
+            print("Usage: pull validate MANIFEST_OR_OUTPUT_DIR [--json]", file=sys.stderr)
+        return EXIT_VALIDATION
     validation = validate_package(Path(ns.path))
     payload = make_envelope(
         ok=validation.ok,
@@ -140,12 +196,14 @@ def _main_validate(argv: Sequence[str]) -> int:
             "output_dir": str(validation.output_dir),
             "errors": len(validation.errors),
             "warnings": len(validation.warnings),
+            "validation_warnings": len(validation.warnings),
+            "package_warnings": validation.metrics.get("package_warnings", 0),
         },
         warnings=validation.warnings,
         errors=validation.errors,
         metrics=validation.metrics,
     )
-    if wants_json(ns.json):
+    if json_mode:
         emit_json(payload)
     elif validation.ok:
         print(
@@ -155,12 +213,26 @@ def _main_validate(argv: Sequence[str]) -> int:
     else:
         for error in validation.errors:
             print(f"{error['code']}: {error['message']}", file=sys.stderr)
-        print(json.dumps(payload, indent=2), file=sys.stderr)
+            details = error.get("details", {})
+            if details.get("file"):
+                print(f"  file: {details['file']}", file=sys.stderr)
+            if details.get("link"):
+                print(f"  link: {details['link']}", file=sys.stderr)
+            if details.get("resolution_base"):
+                print(f"  resolution_base: {details['resolution_base']}", file=sys.stderr)
+            if details.get("candidate_path"):
+                print(f"  candidate_path: {details['candidate_path']}", file=sys.stderr)
+        print("Rerun with --json for the structured validation envelope.", file=sys.stderr)
     return 0 if validation.ok else 10
 
 
 def _main_guide(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="pull guide", description="Emit agent-readable CLI and output schema.")
+    parser = PullArgumentParser(
+        prog="pull guide",
+        description="Emit agent-readable CLI and output schema.",
+        json_mode=_argv_wants_json(argv),
+        command="guide",
+    )
     parser.add_argument("--json", action="store_true", help="Emit only the guide payload as JSON.")
     ns = parser.parse_args(argv)
     payload = guide_payload()
@@ -170,13 +242,24 @@ def _main_guide(argv: Sequence[str]) -> int:
         print("pull-cli guide")
         print("Commands: pull PAGE_REF [OPTIONS], pull validate PATH, pull guide --json")
         print("Use --json or LLM=true for stable agent envelopes on pull/validate.")
+        print("Recommended agent flow: pull guide --json, pull ... --json, pull validate <output-dir> --json.")
+        print("Start analysis from <sanitized-root-page-title>.md in the output package.")
+        print("Manifest and AI manifest paths are package-root-relative; page links are page-file-relative.")
+        print("Run pull guide --json for the full machine-readable schema, error codes, and warning codes.")
     return EXIT_SUCCESS
 
 
-def _pull_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+def _pull_parser(*, json_mode: bool = False) -> argparse.ArgumentParser:
+    parser = PullArgumentParser(
         prog="pull",
         description="Pull Confluence pages into local AI-consumable evidence packages.",
+        epilog=(
+            "Commands: pull PAGE_REF [OPTIONS]; pull validate MANIFEST_OR_OUTPUT_DIR [--json]; "
+            "pull guide [--json]; pull version. "
+            "Agent flow: pull guide --json, pull ... --json, pull validate <output-dir> --json."
+        ),
+        json_mode=json_mode,
+        command="pull",
     )
     parser.add_argument("page_ref", nargs="?", metavar="PAGE_REF", help="Confluence page ID or page URL.")
     parser.add_argument("--page-id", dest="page_id", help="Confluence page/content ID.")
@@ -219,9 +302,14 @@ def _pull_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", help="Optional config YAML path.")
 
     parser.add_argument("--json", action="store_true", help="Emit a structured JSON object on stdout.")
-    parser.add_argument("--quiet", action="store_true", help="Reserved for progress suppression.")
-    parser.add_argument("--verbose", action="store_true", help="Reserved for extra diagnostics.")
+    parser.add_argument("--version", action="version", version=f"pull-cli {__version__}")
+    parser.add_argument("--quiet", action="store_true", help="Accepted but currently no-op; reserved for progress suppression.")
+    parser.add_argument("--verbose", action="store_true", help="Accepted but currently no-op; reserved for extra diagnostics.")
     parser.add_argument("--redact-source-urls", action="store_true")
     parser.add_argument("--redact-manifest", action="store_true")
     parser.add_argument("--strict", action="store_true", help="Treat strict extraction failures as errors.")
     return parser
+
+
+def _argv_wants_json(argv: Sequence[str]) -> bool:
+    return "--json" in argv or wants_json(False)

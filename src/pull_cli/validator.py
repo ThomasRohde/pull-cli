@@ -31,6 +31,15 @@ def validate_package(path: Path) -> ValidationResult:
     result = ValidationResult(ok=True, manifest_path=manifest_path, output_dir=output_dir)
     if not manifest_path.exists():
         return _error(result, "ERR_VALIDATION_REQUIRED", "Manifest file does not exist.", {"path": str(manifest_path)})
+    if manifest_path.is_file() and manifest_path.suffix.lower() == ".md":
+        text = manifest_path.read_text(encoding="utf-8", errors="ignore")
+        if text.lstrip().startswith("# AI Navigation Manifest"):
+            return _error(
+                result,
+                "ERR_VALIDATION_REQUIRED",
+                "This is the AI Markdown entrypoint; validate its parent directory or adjacent manifest.yaml.",
+                {"path": str(manifest_path), "suggested_path": str(manifest_path.parent)},
+            )
     try:
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
     except Exception as exc:  # noqa: BLE001
@@ -73,6 +82,7 @@ def validate_package(path: Path) -> ValidationResult:
         markdown_path = output_dir / str(paths.get("markdown", ""))
         if markdown_path.exists():
             _check_markdown_links(result, markdown_path, output_dir)
+    _check_redacted_rewritten_links(result, output_dir, pages, manifest.get("links"))
 
     for asset in assets:
         if not isinstance(asset, dict):
@@ -92,10 +102,12 @@ def validate_package(path: Path) -> ValidationResult:
                 )
 
     warning_path = output_dir / "diagnostics" / "warnings.jsonl"
+    package_warning_count = 0
     if warning_path.exists():
         for line_number, line in enumerate(warning_path.read_text(encoding="utf-8").splitlines(), start=1):
             if not line.strip():
                 continue
+            package_warning_count += 1
             try:
                 json.loads(line)
             except json.JSONDecodeError as exc:
@@ -105,6 +117,7 @@ def validate_package(path: Path) -> ValidationResult:
                     "warnings.jsonl contains invalid JSON.",
                     {"line": line_number, "reason": str(exc)},
                 )
+    result.metrics["package_warnings"] = package_warning_count
 
     _scan_for_secret_markers(result, output_dir)
     result.ok = not result.errors
@@ -135,14 +148,119 @@ def _check_markdown_links(result: ValidationResult, markdown_path: Path, output_
     text = markdown_path.read_text(encoding="utf-8")
     for match in LOCAL_LINK_RE.finditer(text):
         target = _markdown_link_destination(match.group(1))
-        if not target or target.startswith(("#", "/", "http://", "https://", "mailto:", "jira:")):
+        if not target or target in {"redacted-url", "<redacted-url>"} or target.startswith(("#", "/", "http://", "https://", "mailto:", "jira:")):
             continue
         target_path = target.split("#", 1)[0]
-        if not (markdown_path.parent / target_path).resolve().is_relative_to(output_dir.resolve()):
-            _error(result, "ERR_VALIDATION_REQUIRED", "Markdown link escapes output directory.", {"link": target, "file": str(markdown_path)})
+        resolution_base = markdown_path.parent.resolve()
+        candidate_path = (markdown_path.parent / target_path).resolve()
+        details = {
+            "link": target,
+            "file": str(markdown_path),
+            "resolution_base": str(resolution_base),
+            "candidate_path": str(candidate_path),
+        }
+        if not candidate_path.is_relative_to(output_dir.resolve()):
+            _error(result, "ERR_VALIDATION_REQUIRED", "Markdown link escapes output directory.", details)
             continue
-        if not (markdown_path.parent / target_path).exists():
-            _error(result, "ERR_VALIDATION_REQUIRED", "Markdown local link target does not exist.", {"link": target, "file": str(markdown_path)})
+        if not candidate_path.exists():
+            _error(result, "ERR_VALIDATION_REQUIRED", "Markdown local link target does not exist.", details)
+
+
+def _check_redacted_rewritten_links(
+    result: ValidationResult, output_dir: Path, pages: list[Any], links: object
+) -> None:
+    if not isinstance(links, list):
+        return
+    rewritten_links_by_page: dict[str, int] = {}
+    rewritten_assets_by_page: dict[str, int] = {}
+    redacted_link_allowance_by_page: dict[str, int] = {}
+    redacted_asset_allowance_by_page: dict[str, int] = {}
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        source_page_id = link.get("source_page_id")
+        if not isinstance(source_page_id, str) or not source_page_id:
+            continue
+        kind = link.get("kind")
+        if link.get("status") == "rewritten" and link.get("rewritten"):
+            if kind == "asset":
+                rewritten_assets_by_page[source_page_id] = rewritten_assets_by_page.get(source_page_id, 0) + 1
+            else:
+                rewritten_links_by_page[source_page_id] = rewritten_links_by_page.get(source_page_id, 0) + 1
+        elif kind == "asset":
+            redacted_asset_allowance_by_page[source_page_id] = redacted_asset_allowance_by_page.get(source_page_id, 0) + 1
+        elif kind not in {"anchor", "mailto"}:
+            redacted_link_allowance_by_page[source_page_id] = redacted_link_allowance_by_page.get(source_page_id, 0) + 1
+
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        page_id = page.get("page_id")
+        if not isinstance(page_id, str):
+            continue
+        has_rewritten_links = rewritten_links_by_page.get(page_id, 0) > 0
+        has_rewritten_assets = rewritten_assets_by_page.get(page_id, 0) > 0
+        if not has_rewritten_links and not has_rewritten_assets:
+            continue
+        paths = page.get("paths") if isinstance(page.get("paths"), dict) else {}
+        markdown = paths.get("markdown")
+        if not isinstance(markdown, str) or not markdown:
+            continue
+        markdown_path = output_dir / markdown
+        if not markdown_path.exists():
+            continue
+        redacted_links = _redacted_markdown_link_lines(markdown_path)
+        redacted_page_links = [link for link in redacted_links if link["kind"] == "link"]
+        redacted_asset_links = [link for link in redacted_links if link["kind"] == "image"]
+        link_allowance = redacted_link_allowance_by_page.get(page_id, 0)
+        asset_allowance = redacted_asset_allowance_by_page.get(page_id, 0) + _asset_warning_allowance(page)
+        if has_rewritten_links and len(redacted_page_links) > link_allowance:
+            _error(
+                result,
+                "ERR_VALIDATION_REDACTED_REWRITTEN_LINK",
+                "Markdown contains redacted link placeholders although the manifest has rewritten local links for this page.",
+                {
+                    "page_id": page_id,
+                    "file": str(markdown_path),
+                    "redacted_links": len(redacted_page_links),
+                    "non_rewritten_link_allowance": link_allowance,
+                    "rewritten_links": rewritten_links_by_page[page_id],
+                    "examples": redacted_page_links[:5],
+                },
+            )
+        if has_rewritten_assets and len(redacted_asset_links) > asset_allowance:
+            _error(
+                result,
+                "ERR_VALIDATION_REDACTED_REWRITTEN_LINK",
+                "Markdown contains redacted image placeholders although the manifest has rewritten local assets for this page.",
+                {
+                    "page_id": page_id,
+                    "file": str(markdown_path),
+                    "redacted_images": len(redacted_asset_links),
+                    "non_rewritten_asset_allowance": asset_allowance,
+                    "rewritten_assets": rewritten_assets_by_page[page_id],
+                    "examples": redacted_asset_links[:5],
+                },
+            )
+
+
+def _redacted_markdown_link_lines(markdown_path: Path) -> list[dict[str, Any]]:
+    examples = []
+    for line_number, line in enumerate(markdown_path.read_text(encoding="utf-8").splitlines(), start=1):
+        for match in LOCAL_LINK_RE.finditer(line):
+            if _markdown_link_destination(match.group(1)) == "redacted-url":
+                kind = "image" if match.start() > 0 and line[match.start() - 1] == "!" else "link"
+                examples.append({"line": line_number, "kind": kind, "text": line.strip()})
+    return examples
+
+
+def _asset_warning_allowance(page: dict[str, Any]) -> int:
+    warnings = page.get("warnings") if isinstance(page.get("warnings"), list) else []
+    return sum(
+        1
+        for warning in warnings
+        if isinstance(warning, dict) and warning.get("code") in {"W_ASSET_DOWNLOAD_FAILED", "W_ASSET_SKIPPED_BY_POLICY"}
+    )
 
 
 def _check_ai_manifest(result: ValidationResult, output_dir: Path, path: Path) -> None:
@@ -246,16 +364,15 @@ def _markdown_link_destination(raw: str) -> str:
 
 def _scan_for_secret_markers(result: ValidationResult, output_dir: Path) -> None:
     for path in output_dir.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in {".yaml", ".yml", ".json", ".jsonl", ".md"}:
+        if not path.is_file() or path.suffix.lower() not in {".yaml", ".yml", ".json", ".jsonl", ".md", ".html", ".xml"}:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         if contains_secret_text(text):
-            result.warnings.append(
-                WarningRecord(
-                    code="W_SECURITY_SECRET_PATTERN",
-                    message="A token-like marker was found in a text output file.",
-                    details={"path": str(path.relative_to(output_dir))},
-                )
+            _error(
+                result,
+                "ERR_VALIDATION_SECRET_PATTERN",
+                "A secret-like marker was found in a text output file.",
+                {"path": str(path.relative_to(output_dir))},
             )
 
 

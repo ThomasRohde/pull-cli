@@ -5,17 +5,42 @@ import re
 import shutil
 from dataclasses import asdict
 from datetime import UTC, datetime
+from html import unescape
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from .errors import EXIT_VALIDATION, PullError
+from .html_normalizer import normalize_html
 from .models import AssetRecord, ExtractionResult, PageArtifact, PullOptions, WarningRecord
 from .paths import as_posix, relative_path, slugify
-from .security import redact_value
+from .security import SECRET_KEY_PATTERN, redact_text, redact_value, sanitize_url
 
 BUNDLE_LINK_RE = re.compile(r"(!?\[[^\]]*]\()([^)]+)(\))")
+WRITE_ORIENTED_SNAPSHOT_KEYS = {
+    "draft",
+    "draftid",
+    "edit",
+    "editui",
+    "edituiv2",
+    "isactiveliveeditsession",
+    "operations",
+    "permissions",
+}
+REDACTED_SNAPSHOT_KEYS = {
+    "draftversion",
+    "restrictions",
+    "schedulepublishdate",
+    "schedulepublishinfo",
+}
+REDACTED_LINK_KEYS = {
+    "base",
+    "context",
+    "self",
+    "tinyui",
+    "webui",
+}
 
 
 def prepare_output_dir(output: Path, *, force: bool, clean: bool) -> None:
@@ -39,17 +64,23 @@ def write_page_artifact(output: Path, artifact: PageArtifact, *, options: PullOp
     (page_dir / "assets").mkdir(exist_ok=True)
     (output / artifact.index_md).write_text(artifact.markdown, encoding="utf-8")
     if options.write_html and artifact.index_html:
-        (output / artifact.index_html).write_text(artifact.html, encoding="utf-8")
+        (output / artifact.index_html).write_text(
+            _sanitize_snapshot(artifact.html, redact_source_urls=options.redact_source_urls),
+            encoding="utf-8",
+        )
     if options.write_source and artifact.source_path and artifact.page.body_storage:
-        (output / artifact.source_path).write_text(artifact.page.body_storage, encoding="utf-8")
+        (output / artifact.source_path).write_text(
+            _sanitize_snapshot(artifact.page.body_storage, redact_source_urls=options.redact_source_urls),
+            encoding="utf-8",
+        )
     page_json_data = {
-        "page": redact_value(artifact.page.raw),
+        "page": _sanitize_snapshot(artifact.page.raw, redact_source_urls=options.redact_source_urls),
         "metadata": {
             "page_id": artifact.page.page_id,
             "title": artifact.page.title,
             "space_key": artifact.page.space_key,
             "version": artifact.page.version,
-            "url": artifact.page.url,
+            "url": sanitize_url(artifact.page.url, redact_source_url=options.redact_source_urls),
             "labels": artifact.page.labels,
         },
         "representations": {
@@ -60,7 +91,11 @@ def write_page_artifact(output: Path, artifact: PageArtifact, *, options: PullOp
         "warnings": [warning.to_dict() for warning in artifact.warnings],
     }
     (output / artifact.page_json).write_text(
-        json.dumps(redact_value(page_json_data), indent=2, sort_keys=True),
+        json.dumps(
+            redact_value(page_json_data, redact_source_urls=options.redact_source_urls),
+            indent=2,
+            sort_keys=True,
+        ),
         encoding="utf-8",
     )
 
@@ -207,6 +242,7 @@ def build_ai_manifest(
         "schema_version": "1.0",
         "purpose": "Minimal AI navigation manifest for this pulled Confluence package.",
         "start_here": "Read this file first, then open page markdown paths or asset sidecars as needed.",
+        "artifact_guidance": _artifact_guidance(),
         "path_base": {
             "kind": "package_root",
             "root": ".",
@@ -229,6 +265,7 @@ def build_ai_manifest(
         "pages": pages,
         "diagnostics": {
             "warnings": len(result.warnings),
+            "warning_codes": _warning_counts(result.warnings),
             "warnings_path": "diagnostics/warnings.jsonl",
             "unresolved_links_path": "diagnostics/unresolved-links.md",
         },
@@ -246,12 +283,24 @@ def build_ai_entry_markdown(ai_manifest: dict[str, Any]) -> str:
         "## Agent Instructions",
         "",
         "1. Set `PACKAGE_ROOT` to the directory containing this file.",
-        "2. Resolve every relative path in this file and in the YAML manifest against `PACKAGE_ROOT`, even if your shell current directory is somewhere else.",
-        "3. Use the page hierarchy below to choose the smallest relevant page set before reading broad context.",
+        "2. If you are launched from a repo root or another working directory, keep `PACKAGE_ROOT` as the path base; do not resolve these links against the repo root.",
+        "3. Resolve every relative path in this file and in the YAML manifest against `PACKAGE_ROOT`.",
         "4. Open page Markdown paths under `pages/` for detailed evidence; after opening a page, resolve links inside it relative to that page file.",
-        "5. Open asset sidecars when present before inferring image, diagram, PDF, or text attachment content.",
-        "6. Check diagnostics when warning counts are nonzero before making claims about missing content, broken links, macros, or assets.",
-        "7. Use `bundle.md` for linear reading or search; use individual page paths for navigation.",
+        "5. Use the page hierarchy below to choose the smallest relevant page set before reading broad context.",
+        "6. Prefer individual page files for navigation and `bundle.md` for linear reading or search; bundle links are rebased to `PACKAGE_ROOT`.",
+        "7. Open asset sidecars when present before inferring image, diagram, PDF, or text attachment content.",
+        "8. Check diagnostics when warning counts are nonzero before making claims about missing content, broken links, macros, or assets.",
+        "",
+        "## Artifact Guidance",
+        "",
+        str(ai_manifest.get("artifact_guidance", {}).get("rule", "")),
+        "",
+        "- Navigation surfaces: page `index.md` files and `bundle.md`.",
+        "- Raw reference surfaces: `source.storage.xml` and `page.json`; their links may be redacted and are not evidence of failed local rewriting.",
+        "",
+        "## First Checks",
+        "",
+        "Run `pull validate <PACKAGE_ROOT>` before analysis. If validation fails, inspect the reported file, link, resolution base, candidate path, and diagnostics before trusting generated links or artifacts.",
         "",
         "## Core Files",
         "",
@@ -261,7 +310,7 @@ def build_ai_entry_markdown(ai_manifest: dict[str, Any]) -> str:
         path = entrypoints.get(label) if isinstance(entrypoints, dict) else None
         if path:
             lines.append(f"- {label}: [{path}]({path})")
-    lines.extend(["", "## Pages", ""])
+    lines.extend(["", "## Page Hierarchy", ""])
     _append_page_hierarchy(lines, ai_manifest)
     assets = [
         (page["name"], asset)
@@ -291,6 +340,11 @@ def build_ai_entry_markdown(ai_manifest: dict[str, Any]) -> str:
             ),
         ]
     )
+    warning_codes = ai_manifest.get("diagnostics", {}).get("warning_codes", {})
+    if isinstance(warning_codes, dict) and warning_codes:
+        lines.extend(["", "Warning codes:", ""])
+        for code, count in sorted(warning_codes.items()):
+            lines.append(f"- `{code}`: {count}")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -459,10 +513,61 @@ def _ai_asset(asset: AssetRecord) -> dict[str, Any]:
     }
 
 
+def _warning_counts(warnings: list[WarningRecord]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for warning in warnings:
+        counts[warning.code] = counts.get(warning.code, 0) + 1
+    return counts
+
+
 def _markdown_link_line(label: str, path: object) -> str:
     if not isinstance(path, str) or not path:
         return f"- {label}: unavailable"
     return f"- {label}: [{path}]({path})"
+
+
+def _artifact_guidance() -> dict[str, Any]:
+    return {
+        "rule": "Use page Markdown files and bundle.md for navigation. Treat source.storage.xml and page.json as raw reference artifacts; their source links may be redacted and should not be used to judge rewritten local navigation.",
+        "navigation_surfaces": ["page index.md files", "bundle.md"],
+        "raw_reference_surfaces": ["source.storage.xml", "page.json"],
+    }
+
+
+def _sanitize_snapshot(value: Any, *, redact_source_urls: bool = False) -> Any:
+    if isinstance(value, str):
+        if ("<" in value and ">" in value) or ("&lt;" in value and "&gt;" in value):
+            text = unescape(value)
+            normalized, _warnings = normalize_html(text, source_page_id="", redact_source_urls=redact_source_urls)
+            return redact_text(normalized)
+        text = redact_text(value)
+        if text.startswith(("http://", "https://")):
+            sanitized = sanitize_url(text, redact_source_url=redact_source_urls)
+            return sanitized or text
+        return text
+    if isinstance(value, dict):
+        output: dict[str, Any] = {}
+        for key, child in value.items():
+            key_text = str(key)
+            if _is_write_oriented_snapshot_key(key_text):
+                continue
+            if redact_source_urls and _is_redacted_snapshot_key(key_text):
+                continue
+            output[key_text] = "<redacted>" if SECRET_KEY_PATTERN.search(key_text) else _sanitize_snapshot(child, redact_source_urls=redact_source_urls)
+        return output
+    if isinstance(value, list):
+        return [_sanitize_snapshot(child, redact_source_urls=redact_source_urls) for child in value]
+    return redact_value(value)
+
+
+def _is_write_oriented_snapshot_key(key: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", key.lower())
+    return normalized in WRITE_ORIENTED_SNAPSHOT_KEYS
+
+
+def _is_redacted_snapshot_key(key: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", key.lower())
+    return normalized in REDACTED_SNAPSHOT_KEYS or normalized in REDACTED_LINK_KEYS
 
 
 def _rebase_bundle_links(markdown: str, *, from_file: str, bundle_file: str) -> str:
@@ -517,4 +622,4 @@ def _split_markdown_target(core: str) -> tuple[str, str]:
 
 
 def _is_external_or_page_local(target: str) -> bool:
-    return target.startswith(("#", "/", "http://", "https://", "mailto:", "jira:"))
+    return target in {"redacted-url", "<redacted-url>"} or target.startswith(("#", "/", "http://", "https://", "mailto:", "jira:"))

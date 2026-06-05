@@ -85,21 +85,187 @@ def test_single_page_package_with_image_attachment_macro_and_redaction(tmp_path:
     assert "current working directory" in ai_manifest["path_base"]["rule"]
     assert ai_manifest["entrypoints"]["ai_entry"] == "architecture-overview.md"
     assert ai_manifest["entrypoints"]["ai_manifest"] == "architecture-overview.yaml"
+    assert ai_manifest["diagnostics"]["warning_codes"]["W_LINK_ANCHOR_UNRESOLVED"] == 1
     assert ai_manifest["pages"][0]["name"] == "architecture-overview"
     assert ai_manifest["pages"][0]["parent"] is None
     assert ai_manifest["pages"][0]["markdown"] == result.pages[0].index_md
     assert ai_manifest["pages"][0]["assets"][0]["path"].endswith("assets/system.png")
-    assert "source" not in json.dumps(ai_manifest).lower()
+    assert ai_manifest["artifact_guidance"]["navigation_surfaces"] == ["page index.md files", "bundle.md"]
+    assert ai_manifest["artifact_guidance"]["raw_reference_surfaces"] == ["source.storage.xml", "page.json"]
+    assert "https://example.atlassian.net" not in json.dumps(ai_manifest)
     ai_entry = read(output / manifest["paths"]["ai_entry"])
     assert "[architecture-overview.yaml](architecture-overview.yaml)" in ai_entry
     assert "[manifest.yaml](manifest.yaml)" in ai_entry
     assert "[Architecture Overview]" in ai_entry
     assert "Set `PACKAGE_ROOT` to the directory containing this file" in ai_entry
-    assert "even if your shell current directory is somewhere else" in ai_entry
+    assert "do not resolve these links against the repo root" in ai_entry
+    assert "Run `pull validate <PACKAGE_ROOT>` before analysis" in ai_entry
+    assert "Raw reference surfaces" in ai_entry
+    assert "not evidence of failed local rewriting" in ai_entry
+    assert "`W_LINK_ANCHOR_UNRESOLVED`: 1" in ai_entry
     warning_codes = {warning["code"] for warning in manifest["warnings"]}
     assert {"W_SANITIZED_HTML", "W_LINK_ANCHOR_UNRESOLVED", "W_MACRO_UNKNOWN"} <= warning_codes
     validation = validate_package(output)
     assert validation.ok, validation.errors
+    assert validation.metrics["package_warnings"] == len(result.warnings)
+    ai_entry_validation = validate_package(output / manifest["paths"]["ai_entry"])
+    assert not ai_entry_validation.ok
+    assert "AI Markdown entrypoint" in ai_entry_validation.errors[0]["message"]
+
+
+def test_attachment_macro_ui_is_sanitized_and_replaced_with_read_only_listing(tmp_path: Path) -> None:
+    output = tmp_path / "attachments"
+    page = make_page(
+        "150",
+        "Attachment UI",
+        body_view="""
+        <h1>Attachment UI</h1>
+        <p><a href="/download/attachments/150/readme.txt">Readme</a></p>
+        <div class="plugin_attachments_upload_container">
+          <form method="POST">
+            <input type="hidden" name="atl_token" value="super-secret-token">
+            <input type="file" name="file_0">
+            <label>Upload file</label>
+          </form>
+        </div>
+        <div class="attachment-buttons">
+          <a class="editAttachmentLink" href="/pages/editattachment.action">Properties</a>
+          <a class="removeAttachmentLink" href="/pages/confirmattachmentremoval.action">Delete</a>
+        </div>
+        <a class="download-all-link" href="/download/all_attachments?pageId=150">Download All</a>
+        <div class="plugin_attachments_container">
+          <div class="plugin_attachments_table_container">
+            <table class="attachments">
+              <tr><th>File</th><th>Modified</th></tr>
+              <tr>
+                <td>Labels - No labels <a href="/download/attachments/150/readme.txt" title="Download">readme.txt</a></td>
+                <td>about 3 hours ago by <a href="/wiki/people/account">Thomas Rohde</a></td>
+              </tr>
+            </table>
+          </div>
+        </div>
+        """,
+    )
+    attachment = AttachmentRecord(
+        attachment_id="att-150",
+        page_id="150",
+        filename="readme.txt",
+        media_type="text/plain",
+        download_url="/download/attachments/150/readme.txt",
+    )
+    client = FakeConfluenceClient(
+        pages={"150": page},
+        attachments={"150": [attachment]},
+        downloads={"/download/attachments/150/readme.txt": b"read only"},
+    )
+    result = extract(
+        client=client,
+        root=PageSummary(page_id="150", title="Attachment UI"),
+        options=PullOptions(output=output, force=True, extract_attachments=True),
+    )
+
+    markdown = read(output / result.pages[0].index_md)
+    html = read(output / result.pages[0].index_html)
+    page_json = read(output / result.pages[0].page_json)
+    bundle = read(output / "bundle.md")
+    combined = "\n".join([markdown, html, page_json, bundle])
+    assert "atl_token" not in combined
+    assert "super-secret-token" not in combined
+    assert "Upload file" not in markdown
+    assert "Properties" not in markdown
+    assert "Delete" not in markdown
+    assert "Download All" not in markdown
+    assert "Labels - No labels" not in markdown
+    assert "Modified" not in markdown
+    assert "Thomas Rohde" not in markdown
+    assert "## Attachments" in markdown
+    assert "| readme.txt | `pages/0001-attachment-ui/assets/readme.txt` ([open](assets/readme.txt))" in markdown
+    assert validate_package(output).ok
+
+
+def test_redact_source_urls_applies_to_page_json_html_and_source(tmp_path: Path) -> None:
+    output = tmp_path / "redacted"
+    page = make_page(
+        "175",
+        "Redaction",
+        body_view="""
+        <h1>Redaction</h1>
+        <p><img src="https://example.atlassian.net/wiki/images/image.png?token=secret" data-image-src="https://example.atlassian.net/wiki/images/image.png?token=secret" data-base-url="https://example.atlassian.net/wiki"></p>
+        <p><img src="https://example.atlassian.net/wiki/images/labeled.png?token=secret" alt="Useful redacted diagram"></p>
+        <p><a href="/download/attachments/175/readme.txt?token=secret">Readme</a></p>
+        <p><a href="https://example.atlassian.net/wiki/spaces/EA/pages/999/Outside">Outside</a></p>
+        """,
+        storage='<p><a href="https://example.atlassian.net/wiki/download/attachments/175/source.txt?token=secret">Source</a></p>',
+    )
+    page.raw["body"] = {
+        "view": {"value": page.body_view},
+        "storage": {"value": page.body_storage},
+    }
+    page.raw["_links"] = {
+        "webui": "/spaces/EA/pages/175/Redaction",
+        "tinyui": "/x/abc",
+        "base": "https://example.atlassian.net/wiki",
+        "context": "/wiki",
+        "self": "https://example.atlassian.net/wiki/rest/api/content/175",
+        "editui": "/pages/resumedraft.action?draftId=175",
+        "edituiv2": "/spaces/EA/pages/edit-v2/175",
+    }
+    page.raw["_expandable"] = {"operations": "", "permissions": ""}
+    page.raw["extensions"] = {
+        "draftVersion": 2,
+        "isActiveLiveEditSession": False,
+        "restrictions": {"read": True},
+        "schedulePublishDate": "2026-06-05",
+        "schedulePublishInfo": {"enabled": False},
+    }
+    attachment = AttachmentRecord(
+        attachment_id="readme",
+        page_id="175",
+        filename="readme.txt",
+        media_type="text/plain",
+        download_url="/download/attachments/175/readme.txt?token=secret",
+    )
+    client = FakeConfluenceClient(
+        pages={"175": page},
+        attachments={"175": [attachment]},
+        downloads={"/download/attachments/175/readme.txt?token=secret": b"redacted download"},
+    )
+    result = extract(
+        client=client,
+        root=PageSummary(page_id="175", title="Redaction"),
+        options=PullOptions(output=output, force=True, redact_source_urls=True, redact_manifest=True),
+    )
+
+    html = read(output / result.pages[0].index_html)
+    page_json = read(output / result.pages[0].page_json)
+    markdown = read(output / result.pages[0].index_md)
+    source = read(output / result.pages[0].source_path)
+    manifest_text = read(output / "manifest.yaml")
+    combined = "\n".join([html, page_json, source, manifest_text])
+    assert "https://example.atlassian.net" not in combined
+    assert "/download/attachments/175/readme.txt" not in combined
+    assert "token=secret" not in combined
+    assert "editui" not in page_json
+    assert "edituiv2" not in page_json
+    assert "webui" not in page_json
+    assert "tinyui" not in page_json
+    assert "resumedraft" not in page_json
+    assert "operations" not in page_json
+    assert "permissions" not in page_json
+    assert "draftVersion" not in page_json
+    assert "isActiveLiveEditSession" not in page_json
+    assert "restrictions" not in page_json
+    assert "schedulePublishDate" not in page_json
+    assert "schedulePublishInfo" not in page_json
+    assert '"title": "Redaction"' in page_json
+    assert '"has_rendered_html": true' in page_json
+    assert "![](<redacted-url>)" not in markdown
+    assert "![Useful redacted diagram](<redacted-url>)" in markdown
+    assert "<redacted-url>" in combined
+    assert len(result.assets) == 1
+    assert (output / result.assets[0].local_path).exists()
+    assert "W_ASSET_DOWNLOAD_FAILED" not in {warning.code for warning in result.warnings}
+    assert validate_package(output).ok
 
 
 def test_tree_internal_link_rewriting_and_nested_paths(tmp_path: Path) -> None:
@@ -114,11 +280,16 @@ def test_tree_internal_link_rewriting_and_nested_paths(tmp_path: Path) -> None:
         "Child",
         body_view='<h1>Child</h1><p><a href="/wiki/spaces/EA/pages/202/Grandchild">Grandchild</a></p>',
     )
-    grandchild = make_page("202", "Grandchild", body_view="<h1>Grandchild</h1><p>Leaf.</p>")
+    sibling = make_page("203", "Sibling", body_view="<h1>Sibling</h1><p>Peer.</p>")
+    grandchild = make_page(
+        "202",
+        "Grandchild",
+        body_view='<h1>Grandchild</h1><p>Leaf.</p><p><a href="/wiki/spaces/EA/pages/203/Sibling">Sibling</a></p>',
+    )
     client = FakeConfluenceClient(
-        pages={"200": root, "201": child, "202": grandchild},
+        pages={"200": root, "201": child, "202": grandchild, "203": sibling},
         children={
-            "200": [PageSummary(page_id="201", title="Child")],
+            "200": [PageSummary(page_id="201", title="Child"), PageSummary(page_id="203", title="Sibling")],
             "201": [PageSummary(page_id="202", title="Grandchild")],
         },
     )
@@ -127,28 +298,94 @@ def test_tree_internal_link_rewriting_and_nested_paths(tmp_path: Path) -> None:
         root=PageSummary(page_id="200", title="Root Page"),
         options=PullOptions(output=output, tree=True, force=True),
     )
-    assert len(result.pages) == 3
+    assert len(result.pages) == 4
     assert result.pages[1].index_md.startswith("pages/0001-root-page/0002-child/")
     root_markdown = read(output / result.pages[0].index_md)
     assert "0002-child/index.md" in root_markdown
+    grandchild_markdown = read(output / result.pages[3].index_md)
+    assert "../../0003-sibling/index.md" in grandchild_markdown
     bundle = read(output / "bundle.md")
     assert "(pages/0001-root-page/0002-child/index.md)" in bundle
-    assert "(pages/0001-root-page/0002-child/0003-grandchild/index.md)" in bundle
+    assert "(pages/0001-root-page/0002-child/0004-grandchild/index.md)" in bundle
+    assert "(pages/0001-root-page/0003-sibling/index.md)" in bundle
     assert "(0002-child/index.md)" not in bundle
     manifest = yaml.safe_load((output / "manifest.yaml").read_text(encoding="utf-8"))
     assert manifest["path_base"]["kind"] == "package_root"
     ai_manifest = yaml.safe_load((output / manifest["paths"]["ai_manifest"]).read_text(encoding="utf-8"))
     assert manifest["paths"]["ai_manifest"] == "root-page.yaml"
     assert manifest["paths"]["ai_entry"] == "root-page.md"
-    assert [page["name"] for page in ai_manifest["pages"]] == ["root-page", "child", "grandchild"]
-    assert [page["parent"] for page in ai_manifest["pages"]] == [None, "root-page", "child"]
-    assert ai_manifest["pages"][0]["children"] == ["child"]
+    assert [page["name"] for page in ai_manifest["pages"]] == ["root-page", "child", "sibling", "grandchild"]
+    assert [page["parent"] for page in ai_manifest["pages"]] == [None, "root-page", "root-page", "child"]
+    assert ai_manifest["pages"][0]["children"] == ["child", "sibling"]
     assert ai_manifest["pages"][1]["children"] == ["grandchild"]
     ai_entry = read(output / manifest["paths"]["ai_entry"])
     assert "- `root-page`: [Root Page]" in ai_entry
     assert "  - `child`: [Child]" in ai_entry
+    assert "  - `sibling`: [Sibling]" in ai_entry
     assert "    - `grandchild`: [Grandchild]" in ai_entry
     assert validate_package(output).ok
+
+
+def test_redacted_tree_preserves_local_markdown_and_bundle_links(tmp_path: Path) -> None:
+    output = tmp_path / "redacted-tree"
+    root = make_page(
+        "210",
+        "Root Page",
+        body_view="""
+        <h1>Root Page</h1>
+        <p><a href="/wiki/spaces/EA/pages/211/Child">Child link</a></p>
+        <p><a href="https://example.atlassian.net/wiki/spaces/EA/pages/999/External">External link</a></p>
+        """,
+    )
+    child = make_page("211", "Child", body_view="<h1>Child</h1><p>Child body.</p>")
+    client = FakeConfluenceClient(
+        pages={"210": root, "211": child},
+        children={"210": [PageSummary(page_id="211", title="Child")]},
+    )
+    result = extract(
+        client=client,
+        root=PageSummary(page_id="210", title="Root Page"),
+        options=PullOptions(output=output, tree=True, force=True, redact_source_urls=True, redact_manifest=True),
+    )
+
+    root_markdown = read(output / result.pages[0].index_md)
+    root_html = read(output / result.pages[0].index_html)
+    bundle = read(output / "bundle.md")
+    manifest = yaml.safe_load((output / "manifest.yaml").read_text(encoding="utf-8"))
+    assert "[Child link](0002-child/index.md)" in root_markdown
+    assert '[External link](<redacted-url>)' in root_markdown
+    assert 'href="0002-child/index.md"' in root_html
+    assert "(pages/0001-root-page/0002-child/index.md)" in bundle
+    assert manifest["links"][0]["rewritten"] == "0002-child/index.md"
+    assert validate_package(output).ok
+
+
+def test_validate_rejects_redacted_placeholder_for_rewritten_links(tmp_path: Path) -> None:
+    output = tmp_path / "redacted-placeholder"
+    root = make_page(
+        "220",
+        "Root Page",
+        body_view='<h1>Root Page</h1><p><a href="/wiki/spaces/EA/pages/221/Child">Child link</a></p>',
+    )
+    child = make_page("221", "Child", body_view="<h1>Child</h1>")
+    client = FakeConfluenceClient(
+        pages={"220": root, "221": child},
+        children={"220": [PageSummary(page_id="221", title="Child")]},
+    )
+    result = extract(
+        client=client,
+        root=PageSummary(page_id="220", title="Root Page"),
+        options=PullOptions(output=output, tree=True, force=True, redact_source_urls=True, redact_manifest=True),
+    )
+    root_markdown_path = output / result.pages[0].index_md
+    root_markdown_path.write_text(
+        root_markdown_path.read_text(encoding="utf-8").replace("(0002-child/index.md)", "(<redacted-url>)", 1),
+        encoding="utf-8",
+    )
+
+    validation = validate_package(output)
+    assert not validation.ok
+    assert any(error["code"] == "ERR_VALIDATION_REDACTED_REWRITTEN_LINK" for error in validation.errors)
 
 
 def test_validate_rejects_unknown_ai_manifest_child_reference(tmp_path: Path) -> None:
@@ -302,6 +539,23 @@ def test_manifest_validation_failure(tmp_path: Path) -> None:
     validation = validate_package(bad)
     assert not validation.ok
     assert validation.errors
+
+
+def test_validate_rejects_secret_marker_in_html(tmp_path: Path) -> None:
+    output = tmp_path / "secret-html"
+    page = make_page("425", "Secret HTML", body_view="<h1>Secret HTML</h1>")
+    client = FakeConfluenceClient(pages={"425": page})
+    result = extract(
+        client=client,
+        root=PageSummary(page_id="425", title="Secret HTML"),
+        options=PullOptions(output=output, force=True),
+    )
+    html_path = output / result.pages[0].index_html
+    html_path.write_text('<input type="hidden" name="atl_token" value="abc123">', encoding="utf-8")
+
+    validation = validate_package(output)
+    assert not validation.ok
+    assert validation.errors[-1]["code"] == "ERR_VALIDATION_SECRET_PATTERN"
 
 
 def test_validate_accepts_markdown_title_and_root_relative_web_links(tmp_path: Path) -> None:
