@@ -8,7 +8,7 @@ from atlassian import Confluence
 from atlassian.errors import ApiError, ApiPermissionError
 
 from pull_cli.errors import EXIT_AUTH, EXIT_IO, EXIT_SOURCE, PullError
-from pull_cli.models import AttachmentRecord, Config, PageRecord, PageSummary
+from pull_cli.models import AttachmentRecord, CommentRecord, Config, PageRecord, PageSummary
 from pull_cli.security import redact_value, sanitize_url
 
 
@@ -177,6 +177,18 @@ class DataCenterClient:
             attachments.append(self._parse_attachment(item, page_id))
         return attachments
 
+    def list_comments(self, page_id: str) -> list[CommentRecord]:
+        comments: list[CommentRecord] = []
+        seen: set[str] = set()
+        for location in (None, "inline"):
+            for item in self._get_comment_pages(page_id, location=location):
+                comment = self._parse_comment(item, page_id, fallback_location=location or "footer")
+                if not comment.comment_id or comment.comment_id in seen:
+                    continue
+                seen.add(comment.comment_id)
+                comments.append(comment)
+        return comments
+
     def download_attachment(self, attachment: AttachmentRecord) -> bytes:
         if not attachment.download_url:
             raise PullError(
@@ -189,6 +201,30 @@ class DataCenterClient:
     def download_url(self, url: str) -> bytes:
         absolute = self._absolute_url(url) or url
         return self._call(self._api.get, absolute, not_json_response=True, absolute=True)
+
+    def _get_comment_pages(self, page_id: str, *, location: str | None) -> Iterable[dict[str, object]]:
+        start = 0
+        page_size = 100
+        while True:
+            kwargs: dict[str, object] = {
+                "content_id": page_id,
+                "expand": "body.view,version,history,container,extensions.inlineProperties,extensions.resolution",
+                "start": start,
+                "limit": page_size,
+                "depth": "all",
+            }
+            if location:
+                kwargs["location"] = location
+            data = self._call(self._api.get_page_comments, **kwargs)
+            if not isinstance(data, dict):
+                return
+            results = data.get("results") or []
+            for item in results:
+                if isinstance(item, dict):
+                    yield item
+            if len(results) < page_size:
+                break
+            start += len(results)
 
     def _parse_summary(self, data: dict[str, object], *, parent_id: str | None = None) -> PageSummary:
         links = data.get("_links") if isinstance(data.get("_links"), dict) else {}
@@ -248,11 +284,53 @@ class DataCenterClient:
             raw=redact_value(data),
         )
 
+    def _parse_comment(
+        self, data: dict[str, object], page_id: str, *, fallback_location: str
+    ) -> CommentRecord:
+        body = data.get("body") if isinstance(data.get("body"), dict) else {}
+        view = body.get("view") if isinstance(body.get("view"), dict) else {}
+        version = data.get("version") if isinstance(data.get("version"), dict) else {}
+        history = data.get("history") if isinstance(data.get("history"), dict) else {}
+        extensions = data.get("extensions") if isinstance(data.get("extensions"), dict) else {}
+        resolution = extensions.get("resolution") if isinstance(extensions.get("resolution"), dict) else {}
+        parent = data.get("parent") if isinstance(data.get("parent"), dict) else {}
+        return CommentRecord(
+            comment_id=str(data.get("id") or ""),
+            page_id=page_id,
+            body_html=str(view.get("value") or ""),
+            location=str(extensions.get("location") or fallback_location or "") or None,
+            status=str(data.get("status") or "") or None,
+            version=int(version["number"]) if isinstance(version.get("number"), int) else None,
+            author=_person_display_name(history.get("createdBy")) or _person_display_name(version.get("by")),
+            created_at=str(history.get("createdDate") or "") or None,
+            updated_at=str(version.get("when") or "") or None,
+            parent_id=str(parent.get("id") or data.get("parentId") or "") or None,
+            resolution=_resolution_label(resolution),
+            raw=redact_value(data),
+        )
+
 
 def _body_value(body: dict[str, object], name: str) -> str | None:
     value = body.get(name)
     if isinstance(value, dict) and isinstance(value.get("value"), str):
         return value["value"]
+    return None
+
+
+def _person_display_name(value: object) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    return str(value.get("displayName") or value.get("publicName") or value.get("username") or "") or None
+
+
+def _resolution_label(value: dict[str, object]) -> str | None:
+    if not value:
+        return None
+    for key in ("status", "state"):
+        if value.get(key):
+            return str(value[key])
+    if isinstance(value.get("resolved"), bool):
+        return "resolved" if value["resolved"] else "unresolved"
     return None
 
 

@@ -10,8 +10,16 @@ from .html_normalizer import normalize_html
 from .links import rewrite_html_links
 from .macros import MacroContext, MacroRegistry
 from .markdown_writer import rendered_html_to_markdown
-from .models import ExtractionResult, PageArtifact, PageSummary, PullOptions
+from .models import (
+    CommentRecord,
+    ExtractionResult,
+    PageArtifact,
+    PageSummary,
+    PullOptions,
+    WarningRecord,
+)
 from .paths import relative_path, slugify
+from .security import redact_source_url_text, redact_text
 from .writer import (
     page_markdown_header,
     prepare_output_dir,
@@ -61,6 +69,8 @@ def extract(
         index_html = f"{page_dir}/index.html" if options.write_html else None
         source_path = f"{page_dir}/source.storage.xml" if options.write_source and page.body_storage else None
         page_json = f"{page_dir}/page.json"
+        comments, comment_warnings = _collect_comments(client, page.page_id, options=options)
+        comments_path = f"{page_dir}/comments.md" if comments else None
         rendered = _select_rendered_body(page.body_view, page.body_export_view, page.body_storage)
         normalized_html, html_warnings = normalize_html(
             rendered,
@@ -127,7 +137,9 @@ def extract(
             assets=assets,
             links=links,
             macros=macros,
-            warnings=[*html_warnings, *asset_warnings, *link_warnings, *macro_warnings],
+            warnings=[*html_warnings, *asset_warnings, *link_warnings, *macro_warnings, *comment_warnings],
+            comments_path=comments_path,
+            comments=comments,
         )
         artifact.markdown = (
             page_markdown_header(artifact, options=options)
@@ -207,6 +219,41 @@ def _attachment_markdown(assets, *, page_index_path: str) -> str:
             *rows,
         ]
     )
+
+
+def _collect_comments(
+    client: ConfluenceClient, page_id: str, *, options: PullOptions
+) -> tuple[list[CommentRecord], list[WarningRecord]]:
+    if not options.comments:
+        return [], []
+    try:
+        return _unique_comments(client.list_comments(page_id)), []
+    except Exception as exc:  # noqa: BLE001
+        return [], [
+            WarningRecord(
+                code="W_COMMENTS_FETCH_FAILED",
+                message="Could not fetch Confluence comments for this page.",
+                source_page_id=page_id,
+                details={"reason": _redacted_warning_reason(exc, options=options)},
+            )
+        ]
+
+
+def _unique_comments(comments: list[CommentRecord]) -> list[CommentRecord]:
+    output: list[CommentRecord] = []
+    seen: set[str] = set()
+    for comment in comments:
+        if comment.comment_id and comment.comment_id in seen:
+            continue
+        if comment.comment_id:
+            seen.add(comment.comment_id)
+        output.append(comment)
+    return output
+
+
+def _redacted_warning_reason(exc: Exception, *, options: PullOptions) -> str:
+    reason = redact_text(str(exc))
+    return redact_source_url_text(reason) if options.redact_source_urls else reason
 
 
 def _redact_links(links, *, redact_source_urls: bool) -> None:

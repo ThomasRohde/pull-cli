@@ -15,6 +15,7 @@ SECRET_TEXT_PATTERNS = [
     re.compile(r"(?i)(access_token|api_token|jwt|token|signature|atl_token)=([^&\s]+)"),
     re.compile(r"(?i)\bname=[\"']?(atl_token|token|signature|jwt|password|secret)[\"']?"),
 ]
+SOURCE_URL_TEXT_PATTERN = re.compile(r"https?://[^\s<>'\")]+", re.IGNORECASE)
 SECRET_HTML_INPUT_PATTERN = re.compile(
     r"(?is)<input\b(?=[^>]*\bname=[\"']?(?:atl_token|token|signature|jwt|password|secret)[\"']?)[^>]*>"
 )
@@ -47,6 +48,10 @@ def redact_text(value: str) -> str:
     return redacted
 
 
+def redact_source_url_text(value: str) -> str:
+    return SOURCE_URL_TEXT_PATTERN.sub("<redacted-url>", value)
+
+
 def sanitize_url(url: str | None, *, redact_source_url: bool = False) -> str | None:
     if not url:
         return url
@@ -72,7 +77,8 @@ def redact_value(value: Any, *, redact_source_urls: bool = False) -> Any:
     if isinstance(value, str):
         if value.startswith(("http://", "https://", "/wiki/", "/download/")):
             return sanitize_url(value, redact_source_url=redact_source_urls)
-        return redact_text(value)
+        redacted = redact_text(value)
+        return redact_source_url_text(redacted) if redact_source_urls else redacted
     if isinstance(value, Mapping):
         output: dict[str, Any] = {}
         for key, child in value.items():

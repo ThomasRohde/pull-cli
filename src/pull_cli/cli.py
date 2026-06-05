@@ -103,6 +103,7 @@ def _main_pull(argv: Sequence[str]) -> int:
         depth=ns.depth,
         max_pages=ns.max_pages,
         layout=ns.layout,
+        output_mode=ns.output_mode,
         write_bundle=ns.bundle,
         write_html=ns.html,
         write_source=ns.source,
@@ -110,6 +111,7 @@ def _main_pull(argv: Sequence[str]) -> int:
         asset_policy=ns.assets,
         no_assets=ns.no_assets,
         extract_attachments=ns.extract_attachments,
+        comments=ns.comments,
         diagram_sources=ns.diagram_sources,
         render_mode=ns.render_mode,
         macro_policy=ns.macro_policy,
@@ -143,7 +145,9 @@ def _main_pull(argv: Sequence[str]) -> int:
         result={
             "output_dir": str(result.output_dir),
             "manifest": str(result.manifest_path),
+            "ai_entry": str(result.ai_entry_path) if result.ai_entry_path else None,
             "bundle": str(result.bundle_path) if result.bundle_path else None,
+            "output_mode": options.output_mode,
             "pages": len(result.pages),
             "assets": len(result.assets),
             "warnings": len(result.warnings),
@@ -243,6 +247,8 @@ def _main_guide(argv: Sequence[str]) -> int:
         print("Commands: pull PAGE_REF [OPTIONS], pull validate PATH, pull guide --json")
         print("Use --json or LLM=true for stable agent envelopes on pull/validate.")
         print("Recommended agent flow: pull guide --json, pull ... --json, pull validate <output-dir> --json.")
+        print("Default output mode is simple: root AI Markdown, page Markdown, assets, and validation control files.")
+        print("Use --output-mode full for bundle.md, page HTML snapshots, and source.storage.xml; use --clean to remove stale files when switching modes.")
         print("Start analysis from <sanitized-root-page-title>.md in the output package.")
         print("Manifest and AI manifest paths are package-root-relative; page links are page-file-relative.")
         print("Run pull guide --json for the full machine-readable schema, error codes, and warning codes.")
@@ -256,6 +262,7 @@ def _pull_parser(*, json_mode: bool = False) -> argparse.ArgumentParser:
         epilog=(
             "Commands: pull PAGE_REF [OPTIONS]; pull validate MANIFEST_OR_OUTPUT_DIR [--json]; "
             "pull guide [--json]; pull version. "
+            "Default output mode is simple; use --output-mode full for bundle/html/source artifacts. "
             "Agent flow: pull guide --json, pull ... --json, pull validate <output-dir> --json."
         ),
         json_mode=json_mode,
@@ -276,14 +283,21 @@ def _pull_parser(*, json_mode: bool = False) -> argparse.ArgumentParser:
     parser.add_argument("--force", action="store_true", help="Overwrite files in an existing output directory.")
     parser.add_argument("--clean", action="store_true", help="Delete stale files in the output directory first.")
     parser.add_argument("--layout", choices=["auto", "nested", "flat"], default="auto")
-    parser.add_argument("--bundle", dest="bundle", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--html", dest="html", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--source", dest="source", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--output-mode",
+        choices=["simple", "full"],
+        default="simple",
+        help="Output artifact profile. simple writes quiet agent-facing Markdown by default; full writes all evidence artifacts.",
+    )
+    parser.add_argument("--bundle", dest="bundle", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--html", dest="html", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--source", dest="source", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--chunks", action="store_true")
 
     parser.add_argument("--assets", choices=["visible", "page", "all"], default="visible")
     parser.add_argument("--no-assets", action="store_true")
     parser.add_argument("--extract-attachments", action="store_true")
+    parser.add_argument("--comments", action="store_true", help="Fetch page and inline comments into page-local comments.md sidecars.")
     parser.add_argument("--diagram-sources", action="store_true")
 
     parser.add_argument("--render-mode", choices=["hybrid", "view", "export-view", "styled-view", "storage"], default="hybrid")

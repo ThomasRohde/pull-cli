@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from pull_cli.clients.base import ConfluenceClient
-from pull_cli.models import AttachmentRecord, PageRecord, PageSummary
+from pull_cli.models import AttachmentRecord, CommentRecord, PageRecord, PageSummary
 
 
 class FakeConfluenceClient(ConfluenceClient):
@@ -14,6 +14,8 @@ class FakeConfluenceClient(ConfluenceClient):
         pages: dict[str, PageRecord],
         children: dict[str, list[PageSummary]] | None = None,
         attachments: dict[str, list[AttachmentRecord]] | None = None,
+        comments: dict[str, list[CommentRecord]] | None = None,
+        comment_errors: set[str] | None = None,
         downloads: dict[str, bytes] | None = None,
         base_url: str = "https://example.atlassian.net/wiki",
         deployment_type: str = "cloud",
@@ -21,10 +23,13 @@ class FakeConfluenceClient(ConfluenceClient):
         self.pages = pages
         self.children = children or {}
         self.attachments = attachments or {}
+        self.comments = comments or {}
+        self.comment_errors = comment_errors or set()
         self.downloads = downloads or {}
         self.base_url = base_url
         self.deployment_type = deployment_type
         self.api_calls = 0
+        self.comment_calls: list[str] = []
 
     def get_page(self, page_id: str) -> PageRecord:
         self.api_calls += 1
@@ -55,6 +60,13 @@ class FakeConfluenceClient(ConfluenceClient):
     def list_attachments(self, page_id: str) -> list[AttachmentRecord]:
         self.api_calls += 1
         return [replace(attachment) for attachment in self.attachments.get(page_id, [])]
+
+    def list_comments(self, page_id: str) -> list[CommentRecord]:
+        self.api_calls += 1
+        self.comment_calls.append(page_id)
+        if page_id in self.comment_errors:
+            raise RuntimeError(f"comments unavailable for {page_id}")
+        return [replace(comment) for comment in self.comments.get(page_id, [])]
 
     def download_attachment(self, attachment: AttachmentRecord) -> bytes:
         self.api_calls += 1

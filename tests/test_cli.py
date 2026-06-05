@@ -17,6 +17,8 @@ def test_guide_json_is_plain_json(capsys) -> None:
     payload = json.loads(stdout)
     assert payload["schema_version"] == "1.0"
     assert "pull" in payload["commands"]
+    assert payload["output_schema"]["default_mode"] == "simple"
+    assert "--output-mode simple|full" in payload["commands"]["pull"]["options"]["output"]
 
 
 def test_pull_json_failure_envelope_without_target(capsys, monkeypatch) -> None:
@@ -79,6 +81,7 @@ def test_help_mentions_agent_commands(capsys) -> None:
     stdout = capsys.readouterr().out
     assert "pull validate MANIFEST_OR_OUTPUT_DIR" in stdout
     assert "pull guide [--json]" in stdout
+    assert "--output-mode" in stdout
     assert "Agent flow:" in stdout
 
 
@@ -87,6 +90,8 @@ def test_human_guide_mentions_path_rules(capsys) -> None:
     stdout = capsys.readouterr().out
     assert "Recommended agent flow:" in stdout
     assert "package-root-relative" in stdout
+    assert "Default output mode is simple" in stdout
+    assert "--output-mode full" in stdout
 
 
 def test_redacted_pull_json_redacts_target_url(capsys, monkeypatch, tmp_path: Path) -> None:
@@ -115,3 +120,83 @@ def test_redacted_pull_json_redacts_target_url(capsys, monkeypatch, tmp_path: Pa
     payload = json.loads(stdout)
     assert payload["target"]["url"] == "<redacted-url>"
     assert "https://example.atlassian.net" not in stdout
+
+
+def test_pull_json_reports_simple_default_and_ai_entry(capsys, monkeypatch, tmp_path: Path) -> None:
+    page = make_page("901", "CLI Simple", body_view="<h1>CLI Simple</h1>", storage="<p>Source</p>")
+    client = FakeConfluenceClient(pages={"901": page})
+    monkeypatch.setattr(cli, "build_client", lambda _config: client)
+    output = tmp_path / "cli-simple"
+
+    assert main(["--page-id", "901", "--output", str(output), "--clean", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["result"]["output_mode"] == "simple"
+    assert payload["result"]["ai_entry"].endswith("cli-simple.md")
+    assert (output / "cli-simple.md").exists()
+    assert not (output / "bundle.md").exists()
+    assert not any((output / "pages").rglob("index.html"))
+    assert not any((output / "pages").rglob("source.storage.xml"))
+
+
+def test_output_mode_artifact_flags_override_defaults(capsys, monkeypatch, tmp_path: Path) -> None:
+    simple_page = make_page("902", "CLI Override Simple", body_view="<h1>Simple</h1>", storage="<p>Source</p>")
+    simple_client = FakeConfluenceClient(pages={"902": simple_page})
+    monkeypatch.setattr(cli, "build_client", lambda _config: simple_client)
+    simple_output = tmp_path / "simple-overrides"
+
+    assert (
+        main(
+            [
+                "--page-id",
+                "902",
+                "--output",
+                str(simple_output),
+                "--clean",
+                "--bundle",
+                "--html",
+                "--source",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    simple_payload = json.loads(capsys.readouterr().out)
+    assert simple_payload["result"]["output_mode"] == "simple"
+    assert (simple_output / "bundle.md").exists()
+    assert any((simple_output / "pages").rglob("index.html"))
+    assert any((simple_output / "pages").rglob("source.storage.xml"))
+    simple_ai_entry = (simple_output / "cli-override-simple.md").read_text(encoding="utf-8")
+    assert "[bundle.md](bundle.md)" in simple_ai_entry
+    assert "[manifest.yaml](manifest.yaml)" not in simple_ai_entry
+    assert "[diagnostics/warnings.jsonl](diagnostics/warnings.jsonl)" not in simple_ai_entry
+
+    full_page = make_page("903", "CLI Override Full", body_view="<h1>Full</h1>", storage="<p>Source</p>")
+    full_client = FakeConfluenceClient(pages={"903": full_page})
+    monkeypatch.setattr(cli, "build_client", lambda _config: full_client)
+    full_output = tmp_path / "full-overrides"
+
+    assert (
+        main(
+            [
+                "--page-id",
+                "903",
+                "--output-mode",
+                "full",
+                "--output",
+                str(full_output),
+                "--clean",
+                "--no-bundle",
+                "--no-html",
+                "--no-source",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    full_payload = json.loads(capsys.readouterr().out)
+    assert full_payload["result"]["output_mode"] == "full"
+    assert full_payload["result"]["bundle"] is None
+    assert not (full_output / "bundle.md").exists()
+    assert not any((full_output / "pages").rglob("index.html"))
+    assert not any((full_output / "pages").rglob("source.storage.xml"))

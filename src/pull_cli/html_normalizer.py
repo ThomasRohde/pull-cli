@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 
 from .models import WarningRecord
-from .security import SECRET_KEY_PATTERN, redact_text, sanitize_url
+from .security import SECRET_KEY_PATTERN, redact_source_url_text, redact_text, sanitize_url
 
 WRITE_UI_SELECTORS = (
     ".plugin_attachments_container",
@@ -68,6 +68,12 @@ def normalize_html(
                     tag.attrs[attr] = sanitized
                     removed_executable = True
     if redact_source_urls:
+        for node in soup.find_all(string=True):
+            if isinstance(node, NavigableString):
+                redacted = redact_source_url_text(str(node))
+                if redacted != str(node):
+                    node.replace_with(redacted)
+                    removed_executable = True
         for tag in soup.find_all("img"):
             src = tag.get("src")
             if isinstance(src, str) and _is_redacted_url(src) and not _has_accessible_label(tag):

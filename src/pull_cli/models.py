@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 AssetPolicy = Literal["visible", "page", "all"]
+OutputMode = Literal["simple", "full"]
 RenderMode = Literal["hybrid", "view", "export-view", "styled-view", "storage"]
 MacroPolicy = Literal["expand", "placeholder", "strict"]
 UnknownMacroPolicy = Literal["warn", "error", "ignore"]
@@ -19,13 +20,15 @@ class PullOptions:
     depth: int | None = None
     max_pages: int = 500
     layout: Literal["auto", "nested", "flat"] = "auto"
-    write_bundle: bool = True
-    write_html: bool = True
-    write_source: bool = True
+    output_mode: OutputMode = "simple"
+    write_bundle: bool | None = None
+    write_html: bool | None = None
+    write_source: bool | None = None
     write_chunks: bool = False
     asset_policy: AssetPolicy = "visible"
     no_assets: bool = False
     extract_attachments: bool = False
+    comments: bool = False
     diagram_sources: bool = False
     render_mode: RenderMode = "hybrid"
     macro_policy: MacroPolicy = "expand"
@@ -37,6 +40,15 @@ class PullOptions:
     redact_source_urls: bool = False
     redact_manifest: bool = False
     strict: bool = False
+
+    def __post_init__(self) -> None:
+        full_mode = self.output_mode == "full"
+        if self.write_bundle is None:
+            self.write_bundle = full_mode
+        if self.write_html is None:
+            self.write_html = full_mode
+        if self.write_source is None:
+            self.write_source = full_mode
 
     def manifest_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -99,6 +111,22 @@ class AttachmentRecord:
     download_url: str | None = None
     web_url: str | None = None
     file_size: int | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class CommentRecord:
+    comment_id: str
+    page_id: str
+    body_html: str
+    location: str | None = None
+    status: str | None = None
+    version: int | None = None
+    author: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    parent_id: str | None = None
+    resolution: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -185,6 +213,8 @@ class PageArtifact:
     links: list[LinkRecord] = field(default_factory=list)
     macros: list[MacroRecord] = field(default_factory=list)
     warnings: list[WarningRecord] = field(default_factory=list)
+    comments_path: str | None = None
+    comments: list[CommentRecord] = field(default_factory=list)
 
 
 @dataclass
@@ -198,3 +228,5 @@ class ExtractionResult:
     links: list[LinkRecord]
     macros: list[MacroRecord]
     metrics: dict[str, Any] = field(default_factory=dict)
+    ai_entry_path: Path | None = None
+    ai_manifest_path: Path | None = None

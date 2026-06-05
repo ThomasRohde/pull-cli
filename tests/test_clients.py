@@ -42,6 +42,20 @@ class FakeAtlassianConfluence:
         self.calls.append(("get_page_child_by_type", "", kwargs))
         return []
 
+    def get_page_comments(self, **kwargs):
+        self.calls.append(("get_page_comments", str(kwargs.get("content_id")), kwargs))
+        start = int(kwargs.get("start") or 0)
+        location = kwargs.get("location")
+        if location == "inline":
+            results = [_comment_payload("comment-inline", location="inline"), _comment_payload("comment-0")]
+        elif start == 0:
+            results = [_comment_payload(f"comment-{index}") for index in range(100)]
+        elif start == 100:
+            results = [_comment_payload("comment-100")]
+        else:
+            results = []
+        return {"results": results}
+
     def close(self) -> None:
         self.calls.append(("close", "", {}))
 
@@ -82,3 +96,42 @@ def test_cloud_download_attachment_uses_atlassian_api_wiki_rest_endpoint() -> No
             {"headers": {"Accept": "*/*"}, "not_json_response": True, "absolute": True},
         )
     ]
+
+
+def test_data_center_client_fetches_paginated_footer_and_inline_comments() -> None:
+    api = FakeAtlassianConfluence()
+    client = DataCenterClient(Config(base_url="https://confluence.example.com/confluence"), api=api)  # type: ignore[arg-type]
+
+    comments = client.list_comments("123")
+
+    assert len(comments) == 102
+    assert comments[0].comment_id == "comment-0"
+    assert comments[0].location == "footer"
+    assert comments[0].author == "Comment Author"
+    assert comments[0].body_html == "<p>Comment body comment-0</p>"
+    assert comments[-1].comment_id == "comment-inline"
+    assert comments[-1].location == "inline"
+    comment_calls = [call for call in api.calls if call[0] == "get_page_comments"]
+    assert comment_calls[0][2]["start"] == 0
+    assert comment_calls[0][2]["limit"] == 100
+    assert comment_calls[0][2]["depth"] == "all"
+    assert comment_calls[1][2]["start"] == 100
+    assert comment_calls[-1][2]["location"] == "inline"
+
+
+def _comment_payload(comment_id: str, *, location: str | None = None) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "id": comment_id,
+        "type": "comment",
+        "status": "current",
+        "body": {"view": {"value": f"<p>Comment body {comment_id}</p>"}},
+        "version": {"number": 1, "when": "2026-06-05T08:05:00Z"},
+        "history": {
+            "createdDate": "2026-06-05T08:00:00Z",
+            "createdBy": {"displayName": "Comment Author"},
+        },
+        "extensions": {"resolution": {"status": "open"}},
+    }
+    if location:
+        payload["extensions"] = {"location": location, "resolution": {"status": "open"}}
+    return payload

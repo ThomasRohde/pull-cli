@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from pull_cli.models import AttachmentRecord, PageRecord, PageSummary
+from pull_cli.models import AttachmentRecord, CommentRecord, PageRecord, PageSummary
 
 
 class ConfluenceClient(Protocol):
@@ -19,6 +19,8 @@ class ConfluenceClient(Protocol):
     def get_descendants(self, page_id: str, depth: int | None = None) -> list[PageSummary]: ...
 
     def list_attachments(self, page_id: str) -> list[AttachmentRecord]: ...
+
+    def list_comments(self, page_id: str) -> list[CommentRecord]: ...
 
     def download_attachment(self, attachment: AttachmentRecord) -> bytes: ...
 

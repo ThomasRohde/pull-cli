@@ -1,6 +1,8 @@
 # pull-cli
 
-`pull-cli` installs the `pull` command, a read-only Confluence extractor for AI-consumable evidence packages. It is rendered-page-first: the Markdown bundle is based on the current published page as visible to the authenticated user, while storage XML is kept for macro recovery, provenance, and fallback.
+`pull-cli` installs the `pull` command, a read-only Confluence extractor for AI-consumable evidence packages. It is rendered-page-first: page Markdown, and the optional Markdown bundle in full mode, are based on the current published page as visible to the authenticated user, while storage XML is kept for macro recovery, provenance, and fallback.
+
+The default output mode is `simple`: a quiet agent-facing package with the root AI Markdown file, per-page Markdown files, assets/sidecars, and validation control files. Use `--output-mode full` when you also want `bundle.md`, page HTML snapshots, and storage-source sidecars.
 
 Confluence access is implemented through `atlassian-python-api` behind a small `pull_cli.clients` protocol. The extraction, redaction, manifest, asset, link, and validation contracts remain owned by `pull-cli`.
 
@@ -43,6 +45,9 @@ pull "https://example.atlassian.net/wiki/spaces/EA/pages/123456/Architecture" -o
 pull --space EA --title "Architecture Overview" -o pulled
 pull --page-id 123456 --tree --depth 3 --max-pages 100 -o tree
 pull --page-id 123456 --tree --assets all --extract-attachments -o offline
+pull --page-id 123456 --tree --comments -o with-comments
+pull --page-id 123456 --output-mode full -o full-evidence
+pull --page-id 123456 --output-mode simple --bundle -o simple-with-bundle
 pull --page-id 123456 --json -o pulled
 pull validate pulled
 pull guide --json
@@ -52,29 +57,42 @@ Selector resolution order is: explicit `--page-id`, explicit `--url`, positional
 
 ## Output Package
 
+Default `simple` mode:
+
 ```text
 pulled-confluence/
 ├── page-title.md
 ├── page-title.yaml
 ├── manifest.yaml
-├── bundle.md
 ├── pages/
 │   └── 0001-page-slug/
 │       ├── index.md
-│       ├── index.html
-│       ├── source.storage.xml
 │       ├── page.json
+│       ├── comments.md        # with --comments, only when comments exist
 │       └── assets/
 └── diagnostics/
     ├── warnings.jsonl
     └── unresolved-links.md
 ```
 
-`page-title.md` is named from the sanitized root page title and is the recommended first file to give another AI agent. It contains explicit agent instructions, package-root path rules, a hierarchical page index with sanitized title-based page names, page Markdown paths, assets, extracted sidecars, and diagnostics links.
+`page-title.md` is named from the sanitized root page title and is the recommended first file to give another AI agent. In simple mode it links only the reading/navigation surface: page Markdown paths, assets, sidecars, and explicitly requested agent-facing extras such as `bundle.md` or `chunks.jsonl`. Warning counts are shown, but control files are not linked from the root AI Markdown.
 
 `page-title.yaml` is the machine-readable version of that AI navigation manifest, also named from the sanitized root page title. It intentionally omits noisy provenance and raw API details; use `manifest.yaml` when you need full validation/provenance data. The exact generated filenames are recorded in `manifest.yaml` under `paths.ai_entry` and `paths.ai_manifest`. AI navigation paths are package-root-relative: resolve them against the directory containing the root AI Markdown/YAML file, not the caller's shell working directory.
 
-`manifest.yaml` is mandatory and records source metadata, options, page order, local relative paths, assets, SHA-256 checksums, link rewrites, macro conversions, warnings, and extraction completeness. `bundle.md` concatenates pages in page/tree order with stable delimiters for AI use; local links embedded in the bundle are rebased to the package root.
+`manifest.yaml`, `page.json`, and diagnostics files are still written in simple mode so `pull validate <output-dir>` and provenance checks work. `--force` never deletes stale files from earlier runs; use `--clean` when switching modes if you need the physical tree to contain only files from the new mode.
+
+`--output-mode full` adds the full evidence artifacts:
+
+```text
+pulled-confluence/
+├── bundle.md
+└── pages/
+    └── 0001-page-slug/
+        ├── index.html
+        └── source.storage.xml
+```
+
+`bundle.md` concatenates pages in page/tree order with stable delimiters for AI use; local links embedded in the bundle are rebased to the package root. `index.html` and `source.storage.xml` are raw/reference artifacts, not the primary navigation surface.
 
 For tree pulls, nested page paths are the default. The manifest always carries stable numeric ordering.
 
@@ -96,6 +114,12 @@ The extractor uses a macro adapter registry. Current adapters cover panels/admon
 Asset policy defaults to `visible`: rendered images, visible attachment links, file macros, and rendered diagram images where discoverable. `--assets page` downloads all page attachments. `--assets all` includes visible/referenced assets plus all page attachments and macro-listed files where discoverable. `--no-assets` skips downloads and preserves source links with warnings.
 
 Local links to pages in the pulled tree are rewritten to relative `index.md` paths. Downloaded asset links are rewritten to local files. External, mailto, Jira, and out-of-scope Confluence links are preserved. Same-page anchors are normalized where possible; unresolved anchors become diagnostics.
+
+## Comments
+
+Comments are skipped by default. Use `--comments` to fetch page-level and inline comments for each pulled page. When comments exist, `pull` writes a page-local `comments.md` sidecar with agent-readable metadata and Markdown-converted comment bodies.
+
+Comment sidecars are agent-facing reading surfaces: the root AI Markdown page hierarchy links them in simple mode, the page `index.md` header links the local sidecar, and the AI YAML includes the optional comments path and count. If one page's comments cannot be fetched, the pull continues with `W_COMMENTS_FETCH_FAILED` and validation can still pass for the partial package.
 
 ## JSON Mode
 
@@ -130,7 +154,7 @@ pull validate pulled-confluence
 pull validate pulled-confluence/manifest.yaml --json
 ```
 
-Validation checks manifest shape, AI navigation manifest paths, relative paths, page files, asset checksums, diagnostics JSONL, Markdown local links, and token-like markers in text outputs.
+Validation checks manifest shape, AI navigation manifest paths, relative paths, page files, optional comment sidecars, asset checksums, diagnostics JSONL, Markdown local links, and token-like markers in text outputs.
 
 ## Development
 

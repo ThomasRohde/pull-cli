@@ -13,9 +13,23 @@ import yaml
 
 from .errors import EXIT_VALIDATION, PullError
 from .html_normalizer import normalize_html
-from .models import AssetRecord, ExtractionResult, PageArtifact, PullOptions, WarningRecord
+from .markdown_writer import rendered_html_to_markdown
+from .models import (
+    AssetRecord,
+    CommentRecord,
+    ExtractionResult,
+    PageArtifact,
+    PullOptions,
+    WarningRecord,
+)
 from .paths import as_posix, relative_path, slugify
-from .security import SECRET_KEY_PATTERN, redact_text, redact_value, sanitize_url
+from .security import (
+    SECRET_KEY_PATTERN,
+    redact_source_url_text,
+    redact_text,
+    redact_value,
+    sanitize_url,
+)
 
 BUNDLE_LINK_RE = re.compile(r"(!?\[[^\]]*]\()([^)]+)(\))")
 WRITE_ORIENTED_SNAPSHOT_KEYS = {
@@ -98,6 +112,11 @@ def write_page_artifact(output: Path, artifact: PageArtifact, *, options: PullOp
         ),
         encoding="utf-8",
     )
+    if artifact.comments_path and artifact.comments:
+        (output / artifact.comments_path).write_text(
+            _comments_markdown(artifact, options=options),
+            encoding="utf-8",
+        )
 
 
 def write_manifest(result: ExtractionResult, *, options: PullOptions, root_page_id: str, base_url: str, deployment_type: str) -> None:
@@ -116,7 +135,7 @@ def write_manifest(result: ExtractionResult, *, options: PullOptions, root_page_
         ),
         encoding="utf-8",
     )
-    write_ai_manifests(result)
+    write_ai_manifests(result, options=options)
 
 
 def build_manifest(
@@ -130,28 +149,34 @@ def build_manifest(
     ai_paths = _ai_manifest_paths(result)
     pages = []
     for artifact in result.pages:
-        pages.append(
-            {
-                "order": artifact.order,
-                "page_id": artifact.page.page_id,
-                "title": artifact.page.title,
-                "space_key": artifact.page.space_key,
-                "parent_id": artifact.page.parent_id,
-                "depth": artifact.page.depth,
-                "version": artifact.page.version,
-                "url": artifact.page.url,
-                "paths": {
-                    "dir": artifact.page_dir,
-                    "markdown": artifact.index_md,
-                    "html": artifact.index_html,
-                    "source": artifact.source_path,
-                    "metadata": artifact.page_json,
-                },
-                "assets": [asset.asset_id for asset in artifact.assets],
-                "warnings": [warning.to_dict() for warning in artifact.warnings],
-                "macro_records": [macro.macro_id for macro in artifact.macros],
+        paths = {
+            "dir": artifact.page_dir,
+            "markdown": artifact.index_md,
+            "html": artifact.index_html,
+            "source": artifact.source_path,
+            "metadata": artifact.page_json,
+        }
+        page_entry = {
+            "order": artifact.order,
+            "page_id": artifact.page.page_id,
+            "title": artifact.page.title,
+            "space_key": artifact.page.space_key,
+            "parent_id": artifact.page.parent_id,
+            "depth": artifact.page.depth,
+            "version": artifact.page.version,
+            "url": artifact.page.url,
+            "paths": paths,
+            "assets": [asset.asset_id for asset in artifact.assets],
+            "warnings": [warning.to_dict() for warning in artifact.warnings],
+            "macro_records": [macro.macro_id for macro in artifact.macros],
+        }
+        if artifact.comments_path and artifact.comments:
+            paths["comments"] = artifact.comments_path
+            page_entry["comments"] = {
+                "count": len(artifact.comments),
+                "locations": _comment_locations(artifact.comments, options=options),
             }
-        )
+        pages.append(page_entry)
     return {
         "schema_version": "1.0",
         "tool": {"name": "pull-cli", "version": _tool_version()},
@@ -192,15 +217,17 @@ def build_manifest(
     }
 
 
-def write_ai_manifests(result: ExtractionResult) -> None:
+def write_ai_manifests(result: ExtractionResult, *, options: PullOptions) -> None:
     page_names = _page_names(result.pages)
     ai_paths = _ai_manifest_paths(result, page_names=page_names)
-    ai_manifest = build_ai_manifest(result, page_names=page_names, ai_paths=ai_paths)
-    (result.output_dir / ai_paths["manifest"]).write_text(
+    ai_manifest = build_ai_manifest(result, options=options, page_names=page_names, ai_paths=ai_paths)
+    result.ai_manifest_path = result.output_dir / ai_paths["manifest"]
+    result.ai_entry_path = result.output_dir / ai_paths["entry"]
+    result.ai_manifest_path.write_text(
         yaml.safe_dump(ai_manifest, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
     )
-    (result.output_dir / ai_paths["entry"]).write_text(
+    result.ai_entry_path.write_text(
         build_ai_entry_markdown(ai_manifest),
         encoding="utf-8",
     )
@@ -209,6 +236,7 @@ def write_ai_manifests(result: ExtractionResult) -> None:
 def build_ai_manifest(
     result: ExtractionResult,
     *,
+    options: PullOptions,
     page_names: dict[str, str] | None = None,
     ai_paths: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -224,31 +252,36 @@ def build_ai_manifest(
     for artifact in result.pages:
         parent_name = page_names.get(artifact.page.parent_id or "")
         page_assets = [_ai_asset(asset) for asset in artifact.assets]
-        pages.append(
-            {
-                "name": page_names[artifact.page.page_id],
-                "title": artifact.page.title,
-                "page_id": artifact.page.page_id,
-                "parent": parent_name,
-                "depth": artifact.page.depth,
-                "markdown": artifact.index_md,
-                "children": children_by_parent.get(artifact.page.page_id, []),
-                "assets": page_assets,
-                "warnings": len(artifact.warnings),
-            }
-        )
+        page_entry = {
+            "name": page_names[artifact.page.page_id],
+            "title": artifact.page.title,
+            "page_id": artifact.page.page_id,
+            "parent": parent_name,
+            "depth": artifact.page.depth,
+            "markdown": artifact.index_md,
+            "children": children_by_parent.get(artifact.page.page_id, []),
+            "assets": page_assets,
+            "warnings": len(artifact.warnings),
+        }
+        if artifact.comments_path and artifact.comments:
+            page_entry["comments"] = artifact.comments_path
+            page_entry["comments_count"] = len(artifact.comments)
+        pages.append(page_entry)
 
     return {
         "schema_version": "1.0",
+        "output_mode": options.output_mode,
         "purpose": "Minimal AI navigation manifest for this pulled Confluence package.",
         "start_here": "Read this file first, then open page markdown paths or asset sidecars as needed.",
-        "artifact_guidance": _artifact_guidance(),
+        "artifact_guidance": _artifact_guidance(result, options=options),
         "path_base": {
             "kind": "package_root",
             "root": ".",
             "rule": "Resolve every relative path in this YAML against the directory containing this YAML file, regardless of the agent shell current working directory.",
             "page_markdown_rule": "After opening a page markdown file, resolve links inside that page relative to that page file.",
-            "bundle_rule": "bundle.md is for linear reading and search; its local links are rebased to package_root.",
+            "bundle_rule": "bundle.md is for linear reading and search; its local links are rebased to package_root."
+            if result.bundle_path
+            else None,
         },
         "root": page_names[result.pages[0].page.page_id] if result.pages else None,
         "entrypoints": {
@@ -273,6 +306,9 @@ def build_ai_manifest(
 
 
 def build_ai_entry_markdown(ai_manifest: dict[str, Any]) -> str:
+    simple_mode = ai_manifest.get("output_mode") == "simple"
+    entrypoints = ai_manifest.get("entrypoints", {})
+    bundle_path = entrypoints.get("bundle") if isinstance(entrypoints, dict) else None
     lines = [
         "# AI Navigation Manifest",
         "",
@@ -284,32 +320,49 @@ def build_ai_entry_markdown(ai_manifest: dict[str, Any]) -> str:
         "",
         "1. Set `PACKAGE_ROOT` to the directory containing this file.",
         "2. If you are launched from a repo root or another working directory, keep `PACKAGE_ROOT` as the path base; do not resolve these links against the repo root.",
-        "3. Resolve every relative path in this file and in the YAML manifest against `PACKAGE_ROOT`.",
+        "3. Resolve every relative path in this file against `PACKAGE_ROOT`."
+        if simple_mode
+        else "3. Resolve every relative path in this file and in the YAML manifest against `PACKAGE_ROOT`.",
         "4. Open page Markdown paths under `pages/` for detailed evidence; after opening a page, resolve links inside it relative to that page file.",
         "5. Use the page hierarchy below to choose the smallest relevant page set before reading broad context.",
-        "6. Prefer individual page files for navigation and `bundle.md` for linear reading or search; bundle links are rebased to `PACKAGE_ROOT`.",
+        _agent_instruction_6(simple_mode=simple_mode, bundle_path=bundle_path),
         "7. Open asset sidecars when present before inferring image, diagram, PDF, or text attachment content.",
-        "8. Check diagnostics when warning counts are nonzero before making claims about missing content, broken links, macros, or assets.",
+        "8. Treat warning counts below as a signal to run validation before making claims about missing content, broken links, macros, or assets."
+        if simple_mode
+        else "8. Check diagnostics when warning counts are nonzero before making claims about missing content, broken links, macros, or assets.",
         "",
         "## Artifact Guidance",
         "",
         str(ai_manifest.get("artifact_guidance", {}).get("rule", "")),
         "",
-        "- Navigation surfaces: page `index.md` files and `bundle.md`.",
-        "- Raw reference surfaces: `source.storage.xml` and `page.json`; their links may be redacted and are not evidence of failed local rewriting.",
+        _surfaces_line("Navigation surfaces", ai_manifest.get("artifact_guidance", {}).get("navigation_surfaces")),
+        _simple_control_files_line(simple_mode)
+        if simple_mode
+        else _surfaces_line(
+            "Raw reference surfaces",
+            ai_manifest.get("artifact_guidance", {}).get("raw_reference_surfaces"),
+            suffix="; their links may be redacted and are not evidence of failed local rewriting.",
+        ),
         "",
         "## First Checks",
         "",
         "Run `pull validate <PACKAGE_ROOT>` before analysis. If validation fails, inspect the reported file, link, resolution base, candidate path, and diagnostics before trusting generated links or artifacts.",
-        "",
-        "## Core Files",
-        "",
     ]
-    entrypoints = ai_manifest.get("entrypoints", {})
-    for label in ("ai_manifest", "bundle", "full_manifest", "warnings", "unresolved_links", "chunks"):
+    core_file_labels = ("bundle", "chunks") if simple_mode else (
+        "ai_manifest",
+        "bundle",
+        "full_manifest",
+        "warnings",
+        "unresolved_links",
+        "chunks",
+    )
+    core_file_lines = []
+    for label in core_file_labels:
         path = entrypoints.get(label) if isinstance(entrypoints, dict) else None
         if path:
-            lines.append(f"- {label}: [{path}]({path})")
+            core_file_lines.append(f"- {label}: [{path}]({path})")
+    if core_file_lines:
+        lines.extend(["", "## Core Files", "", *core_file_lines])
     lines.extend(["", "## Page Hierarchy", ""])
     _append_page_hierarchy(lines, ai_manifest)
     assets = [
@@ -328,24 +381,42 @@ def build_ai_entry_markdown(ai_manifest: dict[str, Any]) -> str:
             lines.append(
                 f"- `{page_name}/{asset['name']}`: [{asset['path']}]({asset['path']}){sidecar_text}"
             )
-    lines.extend(
-        [
-            "",
-            "## Diagnostics",
-            "",
-            f"- warnings: {ai_manifest.get('diagnostics', {}).get('warnings', 0)}",
-            _markdown_link_line("warning records", ai_manifest.get("diagnostics", {}).get("warnings_path")),
-            _markdown_link_line(
-                "unresolved links", ai_manifest.get("diagnostics", {}).get("unresolved_links_path")
-            ),
-        ]
-    )
+    lines.extend(["", "## Diagnostics", "", f"- warnings: {ai_manifest.get('diagnostics', {}).get('warnings', 0)}"])
+    if not simple_mode:
+        lines.extend(
+            [
+                _markdown_link_line("warning records", ai_manifest.get("diagnostics", {}).get("warnings_path")),
+                _markdown_link_line(
+                    "unresolved links", ai_manifest.get("diagnostics", {}).get("unresolved_links_path")
+                ),
+            ]
+        )
     warning_codes = ai_manifest.get("diagnostics", {}).get("warning_codes", {})
     if isinstance(warning_codes, dict) and warning_codes:
         lines.extend(["", "Warning codes:", ""])
         for code, count in sorted(warning_codes.items()):
             lines.append(f"- `{code}`: {count}")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _agent_instruction_6(*, simple_mode: bool, bundle_path: object) -> str:
+    if bundle_path:
+        return "6. Prefer individual page files for navigation and `bundle.md` for linear reading or search; bundle links are rebased to `PACKAGE_ROOT`."
+    if simple_mode:
+        return "6. Use individual page files for navigation and reading."
+    return "6. Prefer individual page files for navigation; no `bundle.md` was written for this package."
+
+
+def _surfaces_line(label: str, surfaces: object, *, suffix: str = ".") -> str:
+    items = surfaces if isinstance(surfaces, list) else []
+    rendered = ", ".join(f"`{item}`" for item in items if isinstance(item, str)) or "none"
+    return f"- {label}: {rendered}{suffix}"
+
+
+def _simple_control_files_line(simple_mode: bool) -> str:
+    if simple_mode:
+        return "- Control and provenance files are written for tooling but are intentionally not listed as reading targets in simple mode."
+    return ""
 
 
 def _append_page_hierarchy(lines: list[str], ai_manifest: dict[str, Any]) -> None:
@@ -388,9 +459,12 @@ def _append_page_hierarchy(lines: list[str], ai_manifest: dict[str, Any]) -> Non
 
 def _page_hierarchy_line(page: dict[str, Any]) -> str:
     markdown = page.get("markdown", "")
+    comments = ""
+    if isinstance(page.get("comments"), str):
+        comments = f", comments {page.get('comments_count', 0)} ([comments.md]({page['comments']}))"
     return (
         f"`{page.get('name')}`: [{page.get('title')}]({markdown}) "
-        f"- path `{markdown}`, depth {page.get('depth')}, assets {len(page.get('assets', []))}, warnings {page.get('warnings')}"
+        f"- path `{markdown}`, depth {page.get('depth')}, assets {len(page.get('assets', []))}, warnings {page.get('warnings')}{comments}"
     )
 
 
@@ -469,6 +543,14 @@ def page_markdown_header(artifact: PageArtifact, *, options: PullOptions) -> str
         f"> Source: Confluence page `{artifact.page.page_id}`, version {artifact.page.version or 'unknown'}.",
         "",
     ]
+    if artifact.comments_path and artifact.comments:
+        comments_link = relative_path(artifact.index_md, artifact.comments_path)
+        lines.extend(
+            [
+                f"> Comments sidecar: [{len(artifact.comments)} comment(s)]({comments_link}).",
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -520,17 +602,99 @@ def _warning_counts(warnings: list[WarningRecord]) -> dict[str, int]:
     return counts
 
 
+def _comments_markdown(artifact: PageArtifact, *, options: PullOptions) -> str:
+    lines = [
+        f"# Comments for {artifact.page.title}",
+        "",
+        f"Page ID: `{artifact.page.page_id}`",
+        f"Comment count: {len(artifact.comments)}",
+        "",
+    ]
+    for index, comment in enumerate(artifact.comments, start=1):
+        lines.extend(_comment_markdown_block(index, comment, options=options))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _comment_markdown_block(index: int, comment: CommentRecord, *, options: PullOptions) -> list[str]:
+    lines = [
+        f"## Comment {index}: `{_comment_field(comment.comment_id, options=options)}`",
+        "",
+    ]
+    metadata = [
+        ("location", comment.location),
+        ("status", comment.status),
+        ("resolution", comment.resolution),
+        ("version", comment.version),
+        ("author", comment.author),
+        ("created", comment.created_at),
+        ("updated", comment.updated_at),
+        ("parent", comment.parent_id),
+    ]
+    for label, value in metadata:
+        if value is not None and value != "":
+            lines.append(f"- {label}: {_comment_field(value, options=options)}")
+    body = _comment_body_markdown(comment, options=options)
+    lines.extend(["", body or "_No comment body returned._", ""])
+    return lines
+
+
+def _comment_body_markdown(comment: CommentRecord, *, options: PullOptions) -> str:
+    sanitized_html, _warnings = normalize_html(
+        comment.body_html,
+        source_page_id=comment.page_id,
+        redact_source_urls=options.redact_source_urls,
+    )
+    return rendered_html_to_markdown(sanitized_html).strip()
+
+
+def _comment_field(value: object, *, options: PullOptions) -> str:
+    text = str(_sanitize_snapshot(value, redact_source_urls=options.redact_source_urls) or "")
+    return text.replace("\n", " ").strip()
+
+
+def _comment_locations(comments: list[CommentRecord], *, options: PullOptions) -> list[str]:
+    return sorted(
+        {
+            _comment_field(comment.location, options=options)
+            for comment in comments
+            if comment.location
+        }
+    )
+
+
 def _markdown_link_line(label: str, path: object) -> str:
     if not isinstance(path, str) or not path:
         return f"- {label}: unavailable"
     return f"- {label}: [{path}]({path})"
 
 
-def _artifact_guidance() -> dict[str, Any]:
+def _artifact_guidance(result: ExtractionResult, *, options: PullOptions) -> dict[str, Any]:
+    navigation_surfaces = ["page index.md files"]
+    if result.bundle_path:
+        navigation_surfaces.append("bundle.md")
+    raw_reference_surfaces = ["page.json"]
+    if any(artifact.source_path for artifact in result.pages):
+        raw_reference_surfaces.insert(0, "source.storage.xml")
+    rendered_reference_surfaces = ["index.html"] if any(artifact.index_html for artifact in result.pages) else []
+    if result.bundle_path:
+        navigation_rule = "Use page Markdown files and bundle.md for navigation."
+    else:
+        navigation_rule = "Use page Markdown files for navigation."
+    if options.output_mode == "simple":
+        rule = (
+            f"{navigation_rule} Simple mode keeps control and provenance artifacts available for tooling "
+            "without listing them as primary reading targets."
+        )
+    else:
+        rule = (
+            f"{navigation_rule} Treat raw reference artifacts as source evidence only; their source links may be "
+            "redacted and should not be used to judge rewritten local navigation."
+        )
     return {
-        "rule": "Use page Markdown files and bundle.md for navigation. Treat source.storage.xml and page.json as raw reference artifacts; their source links may be redacted and should not be used to judge rewritten local navigation.",
-        "navigation_surfaces": ["page index.md files", "bundle.md"],
-        "raw_reference_surfaces": ["source.storage.xml", "page.json"],
+        "rule": rule,
+        "navigation_surfaces": navigation_surfaces,
+        "raw_reference_surfaces": raw_reference_surfaces,
+        "rendered_reference_surfaces": rendered_reference_surfaces,
     }
 
 
@@ -539,11 +703,14 @@ def _sanitize_snapshot(value: Any, *, redact_source_urls: bool = False) -> Any:
         if ("<" in value and ">" in value) or ("&lt;" in value and "&gt;" in value):
             text = unescape(value)
             normalized, _warnings = normalize_html(text, source_page_id="", redact_source_urls=redact_source_urls)
-            return redact_text(normalized)
+            redacted = redact_text(normalized)
+            return redact_source_url_text(redacted) if redact_source_urls else redacted
         text = redact_text(value)
         if text.startswith(("http://", "https://")):
             sanitized = sanitize_url(text, redact_source_url=redact_source_urls)
             return sanitized or text
+        if redact_source_urls:
+            return redact_source_url_text(text)
         return text
     if isinstance(value, dict):
         output: dict[str, Any] = {}

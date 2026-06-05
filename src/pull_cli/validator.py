@@ -76,9 +76,13 @@ def validate_package(path: Path) -> ValidationResult:
         paths = page.get("paths") if isinstance(page.get("paths"), dict) else {}
         for key in ("markdown", "metadata"):
             _check_relative_file(result, output_dir, paths.get(key), f"page.{key}")
-        for optional in ("html", "source"):
+        for optional in ("html", "source", "comments"):
             if paths.get(optional):
                 _check_relative_file(result, output_dir, paths.get(optional), f"page.{optional}")
+                if optional == "comments":
+                    comments_path = output_dir / str(paths.get(optional))
+                    if comments_path.exists():
+                        _check_markdown_links(result, comments_path, output_dir)
         markdown_path = output_dir / str(paths.get("markdown", ""))
         if markdown_path.exists():
             _check_markdown_links(result, markdown_path, output_dir)
@@ -300,6 +304,8 @@ def _check_ai_manifest(result: ValidationResult, output_dir: Path, path: Path) -
             page_children.append((name, children))
             page_parents.append((name, page.get("parent")))
         _check_relative_file(result, output_dir, page.get("markdown"), "ai_manifest.page.markdown")
+        if page.get("comments"):
+            _check_relative_file(result, output_dir, page.get("comments"), "ai_manifest.page.comments")
         assets = page.get("assets") if isinstance(page.get("assets"), list) else []
         for asset in assets:
             if not isinstance(asset, dict):

@@ -7,7 +7,7 @@ import yaml
 
 from pull_cli.errors import PullError
 from pull_cli.extractor import extract
-from pull_cli.models import AttachmentRecord, PageSummary, PullOptions
+from pull_cli.models import AttachmentRecord, CommentRecord, PageSummary, PullOptions
 from pull_cli.validator import validate_package
 
 from .conftest import FakeConfluenceClient, make_page, read
@@ -65,7 +65,16 @@ def test_single_page_package_with_image_attachment_macro_and_redaction(tmp_path:
     assert (output / "architecture-overview.md").exists()
     assert not (output / "ai-manifest.yaml").exists()
     assert not (output / "AI_MANIFEST.md").exists()
-    assert (output / "bundle.md").exists()
+    assert (output / result.pages[0].page_json).exists()
+    assert (output / "diagnostics" / "warnings.jsonl").exists()
+    assert (output / "diagnostics" / "unresolved-links.md").exists()
+    assert not (output / "bundle.md").exists()
+    assert result.bundle_path is None
+    assert result.pages[0].index_html is None
+    assert result.pages[0].source_path is None
+    assert result.pages[0].comments_path is None
+    assert client.comment_calls == []
+    assert not (output / "pages" / "0001-architecture-overview" / "comments.md").exists()
     markdown = read(output / result.pages[0].index_md)
     assert "Visible rendered content." in markdown
     assert "assets/system.png" in markdown
@@ -76,32 +85,42 @@ def test_single_page_package_with_image_attachment_macro_and_redaction(tmp_path:
     manifest = yaml.safe_load((output / "manifest.yaml").read_text(encoding="utf-8"))
     assert manifest["paths"]["ai_manifest"] == "architecture-overview.yaml"
     assert manifest["paths"]["ai_entry"] == "architecture-overview.md"
+    assert manifest["paths"]["bundle"] is None
+    assert manifest["options"]["output_mode"] == "simple"
+    assert manifest["options"]["write_bundle"] is False
+    assert manifest["options"]["write_html"] is False
+    assert manifest["options"]["write_source"] is False
     ai_manifest = yaml.safe_load((output / manifest["paths"]["ai_manifest"]).read_text(encoding="utf-8"))
     assert manifest["assets"][0]["sha256"]
     assert "secret" not in json.dumps(manifest)
+    assert ai_manifest["output_mode"] == "simple"
     assert ai_manifest["root"] == "architecture-overview"
     assert ai_manifest["path_base"]["kind"] == "package_root"
     assert ai_manifest["path_base"]["root"] == "."
     assert "current working directory" in ai_manifest["path_base"]["rule"]
     assert ai_manifest["entrypoints"]["ai_entry"] == "architecture-overview.md"
     assert ai_manifest["entrypoints"]["ai_manifest"] == "architecture-overview.yaml"
+    assert ai_manifest["entrypoints"]["bundle"] is None
     assert ai_manifest["diagnostics"]["warning_codes"]["W_LINK_ANCHOR_UNRESOLVED"] == 1
     assert ai_manifest["pages"][0]["name"] == "architecture-overview"
     assert ai_manifest["pages"][0]["parent"] is None
     assert ai_manifest["pages"][0]["markdown"] == result.pages[0].index_md
     assert ai_manifest["pages"][0]["assets"][0]["path"].endswith("assets/system.png")
-    assert ai_manifest["artifact_guidance"]["navigation_surfaces"] == ["page index.md files", "bundle.md"]
-    assert ai_manifest["artifact_guidance"]["raw_reference_surfaces"] == ["source.storage.xml", "page.json"]
+    assert ai_manifest["artifact_guidance"]["navigation_surfaces"] == ["page index.md files"]
+    assert ai_manifest["artifact_guidance"]["raw_reference_surfaces"] == ["page.json"]
+    assert ai_manifest["artifact_guidance"]["rendered_reference_surfaces"] == []
     assert "https://example.atlassian.net" not in json.dumps(ai_manifest)
     ai_entry = read(output / manifest["paths"]["ai_entry"])
-    assert "[architecture-overview.yaml](architecture-overview.yaml)" in ai_entry
-    assert "[manifest.yaml](manifest.yaml)" in ai_entry
+    assert "[architecture-overview.yaml](architecture-overview.yaml)" not in ai_entry
+    assert "[manifest.yaml](manifest.yaml)" not in ai_entry
+    assert "[diagnostics/warnings.jsonl](diagnostics/warnings.jsonl)" not in ai_entry
+    assert "[diagnostics/unresolved-links.md](diagnostics/unresolved-links.md)" not in ai_entry
     assert "[Architecture Overview]" in ai_entry
     assert "Set `PACKAGE_ROOT` to the directory containing this file" in ai_entry
     assert "do not resolve these links against the repo root" in ai_entry
     assert "Run `pull validate <PACKAGE_ROOT>` before analysis" in ai_entry
-    assert "Raw reference surfaces" in ai_entry
-    assert "not evidence of failed local rewriting" in ai_entry
+    assert "Control and provenance files are written for tooling" in ai_entry
+    assert "Raw reference surfaces" not in ai_entry
     assert "`W_LINK_ANCHOR_UNRESOLVED`: 1" in ai_entry
     warning_codes = {warning["code"] for warning in manifest["warnings"]}
     assert {"W_SANITIZED_HTML", "W_LINK_ANCHOR_UNRESOLVED", "W_MACRO_UNKNOWN"} <= warning_codes
@@ -111,6 +130,138 @@ def test_single_page_package_with_image_attachment_macro_and_redaction(tmp_path:
     ai_entry_validation = validate_package(output / manifest["paths"]["ai_entry"])
     assert not ai_entry_validation.ok
     assert "AI Markdown entrypoint" in ai_entry_validation.errors[0]["message"]
+
+
+def test_comments_option_writes_markdown_sidecar_and_agent_links(tmp_path: Path) -> None:
+    output = tmp_path / "comments"
+    page = make_page("120", "Commented Page", body_view="<h1>Commented Page</h1><p>Body.</p>")
+    comments = [
+        CommentRecord(
+            comment_id="c-1",
+            page_id="120",
+            location="footer",
+            status="current",
+            version=1,
+            author="Thomas Rohde",
+            created_at="2026-06-05T08:00:00Z",
+            updated_at="2026-06-05T08:05:00Z",
+            body_html='<p>Footer comment with <a href="https://example.atlassian.net/wiki/comment?token=secret">source</a>.</p>',
+        ),
+        CommentRecord(
+            comment_id="c-1",
+            page_id="120",
+            location="footer",
+            body_html="<p>Duplicate should be omitted.</p>",
+        ),
+        CommentRecord(
+            comment_id="c-2",
+            page_id="120",
+            location="inline",
+            status="resolved",
+            version=2,
+            author="Inline Author",
+            parent_id="c-1",
+            resolution="resolved",
+            body_html="<p>Inline reply body.</p>",
+        ),
+    ]
+    client = FakeConfluenceClient(pages={"120": page}, comments={"120": comments})
+
+    result = extract(
+        client=client,
+        root=PageSummary(page_id="120", title="Commented Page"),
+        options=PullOptions(
+            output=output,
+            force=True,
+            comments=True,
+            redact_source_urls=True,
+            redact_manifest=True,
+        ),
+    )
+
+    assert client.comment_calls == ["120"]
+    assert result.pages[0].comments_path == "pages/0001-commented-page/comments.md"
+    comments_path = output / result.pages[0].comments_path
+    comments_markdown = read(comments_path)
+    assert "Footer comment with [source](<redacted-url>)." in comments_markdown
+    assert "Inline reply body." in comments_markdown
+    assert "Duplicate should be omitted" not in comments_markdown
+    assert "- location: footer" in comments_markdown
+    assert "- location: inline" in comments_markdown
+    assert "- author: Thomas Rohde" in comments_markdown
+    assert "- parent: c-1" in comments_markdown
+    assert "token=secret" not in comments_markdown
+    assert "https://example.atlassian.net" not in comments_markdown
+
+    page_markdown = read(output / result.pages[0].index_md)
+    assert "Comments sidecar: [2 comment(s)](comments.md)" in page_markdown
+    manifest = yaml.safe_load((output / "manifest.yaml").read_text(encoding="utf-8"))
+    assert manifest["options"]["comments"] is True
+    assert manifest["pages"][0]["paths"]["comments"] == result.pages[0].comments_path
+    assert manifest["pages"][0]["comments"] == {"count": 2, "locations": ["footer", "inline"]}
+    ai_manifest = yaml.safe_load((output / manifest["paths"]["ai_manifest"]).read_text(encoding="utf-8"))
+    assert ai_manifest["pages"][0]["comments"] == result.pages[0].comments_path
+    assert ai_manifest["pages"][0]["comments_count"] == 2
+    ai_entry = read(output / manifest["paths"]["ai_entry"])
+    assert "comments 2 ([comments.md](pages/0001-commented-page/comments.md))" in ai_entry
+    assert validate_package(output).ok
+
+
+def test_comments_fetch_failure_warns_without_sidecar(tmp_path: Path) -> None:
+    output = tmp_path / "comments-failed"
+    page = make_page("121", "Comment Failure", body_view="<h1>Comment Failure</h1>")
+    client = FakeConfluenceClient(pages={"121": page}, comment_errors={"121"})
+
+    result = extract(
+        client=client,
+        root=PageSummary(page_id="121", title="Comment Failure"),
+        options=PullOptions(output=output, force=True, comments=True),
+    )
+
+    assert client.comment_calls == ["121"]
+    assert result.pages[0].comments_path is None
+    assert "W_COMMENTS_FETCH_FAILED" in {warning.code for warning in result.warnings}
+    manifest = yaml.safe_load((output / "manifest.yaml").read_text(encoding="utf-8"))
+    assert "comments" not in manifest["pages"][0]["paths"]
+    assert validate_package(output).ok
+
+
+def test_full_mode_writes_current_evidence_artifacts_and_links_control_files(tmp_path: Path) -> None:
+    output = tmp_path / "full"
+    page = make_page(
+        "125",
+        "Full Evidence",
+        body_view="<h1>Full Evidence</h1><p>Visible.</p>",
+        storage="<p>Storage evidence.</p>",
+    )
+    client = FakeConfluenceClient(pages={"125": page})
+    result = extract(
+        client=client,
+        root=PageSummary(page_id="125", title="Full Evidence"),
+        options=PullOptions(output=output, force=True, output_mode="full"),
+    )
+
+    assert (output / "bundle.md").exists()
+    assert result.bundle_path == output / "bundle.md"
+    assert result.pages[0].index_html == "pages/0001-full-evidence/index.html"
+    assert result.pages[0].source_path == "pages/0001-full-evidence/source.storage.xml"
+    assert (output / result.pages[0].index_html).exists()
+    assert (output / result.pages[0].source_path).exists()
+    manifest = yaml.safe_load((output / "manifest.yaml").read_text(encoding="utf-8"))
+    assert manifest["options"]["output_mode"] == "full"
+    assert manifest["options"]["write_bundle"] is True
+    assert manifest["options"]["write_html"] is True
+    assert manifest["options"]["write_source"] is True
+    ai_manifest = yaml.safe_load((output / manifest["paths"]["ai_manifest"]).read_text(encoding="utf-8"))
+    assert ai_manifest["output_mode"] == "full"
+    assert ai_manifest["artifact_guidance"]["navigation_surfaces"] == ["page index.md files", "bundle.md"]
+    assert ai_manifest["artifact_guidance"]["raw_reference_surfaces"] == ["source.storage.xml", "page.json"]
+    assert ai_manifest["artifact_guidance"]["rendered_reference_surfaces"] == ["index.html"]
+    ai_entry = read(output / manifest["paths"]["ai_entry"])
+    assert "[full-evidence.yaml](full-evidence.yaml)" in ai_entry
+    assert "[manifest.yaml](manifest.yaml)" in ai_entry
+    assert "[diagnostics/warnings.jsonl](diagnostics/warnings.jsonl)" in ai_entry
+    assert validate_package(output).ok
 
 
 def test_attachment_macro_ui_is_sanitized_and_replaced_with_read_only_listing(tmp_path: Path) -> None:
@@ -161,7 +312,7 @@ def test_attachment_macro_ui_is_sanitized_and_replaced_with_read_only_listing(tm
     result = extract(
         client=client,
         root=PageSummary(page_id="150", title="Attachment UI"),
-        options=PullOptions(output=output, force=True, extract_attachments=True),
+        options=PullOptions(output=output, force=True, output_mode="full", extract_attachments=True),
     )
 
     markdown = read(output / result.pages[0].index_md)
@@ -192,10 +343,11 @@ def test_redact_source_urls_applies_to_page_json_html_and_source(tmp_path: Path)
         <h1>Redaction</h1>
         <p><img src="https://example.atlassian.net/wiki/images/image.png?token=secret" data-image-src="https://example.atlassian.net/wiki/images/image.png?token=secret" data-base-url="https://example.atlassian.net/wiki"></p>
         <p><img src="https://example.atlassian.net/wiki/images/labeled.png?token=secret" alt="Useful redacted diagram"></p>
+        <p>Literal source URL: https://example.atlassian.net/wiki/spaces/EA/pages/175/Redaction</p>
         <p><a href="/download/attachments/175/readme.txt?token=secret">Readme</a></p>
         <p><a href="https://example.atlassian.net/wiki/spaces/EA/pages/999/Outside">Outside</a></p>
         """,
-        storage='<p><a href="https://example.atlassian.net/wiki/download/attachments/175/source.txt?token=secret">Source</a></p>',
+        storage='<p><a href="https://example.atlassian.net/wiki/download/attachments/175/source.txt?token=secret">Source</a> and literal https://example.atlassian.net/wiki/display/EA/Redaction</p>',
     )
     page.raw["body"] = {
         "view": {"value": page.body_view},
@@ -233,7 +385,13 @@ def test_redact_source_urls_applies_to_page_json_html_and_source(tmp_path: Path)
     result = extract(
         client=client,
         root=PageSummary(page_id="175", title="Redaction"),
-        options=PullOptions(output=output, force=True, redact_source_urls=True, redact_manifest=True),
+        options=PullOptions(
+            output=output,
+            force=True,
+            output_mode="full",
+            redact_source_urls=True,
+            redact_manifest=True,
+        ),
     )
 
     html = read(output / result.pages[0].index_html)
@@ -243,6 +401,7 @@ def test_redact_source_urls_applies_to_page_json_html_and_source(tmp_path: Path)
     manifest_text = read(output / "manifest.yaml")
     combined = "\n".join([html, page_json, source, manifest_text])
     assert "https://example.atlassian.net" not in combined
+    assert "https://example.atlassian.net" not in markdown
     assert "/download/attachments/175/readme.txt" not in combined
     assert "token=secret" not in combined
     assert "editui" not in page_json
@@ -296,7 +455,7 @@ def test_tree_internal_link_rewriting_and_nested_paths(tmp_path: Path) -> None:
     result = extract(
         client=client,
         root=PageSummary(page_id="200", title="Root Page"),
-        options=PullOptions(output=output, tree=True, force=True),
+        options=PullOptions(output=output, tree=True, force=True, output_mode="full"),
     )
     assert len(result.pages) == 4
     assert result.pages[1].index_md.startswith("pages/0001-root-page/0002-child/")
@@ -345,7 +504,14 @@ def test_redacted_tree_preserves_local_markdown_and_bundle_links(tmp_path: Path)
     result = extract(
         client=client,
         root=PageSummary(page_id="210", title="Root Page"),
-        options=PullOptions(output=output, tree=True, force=True, redact_source_urls=True, redact_manifest=True),
+        options=PullOptions(
+            output=output,
+            tree=True,
+            force=True,
+            output_mode="full",
+            redact_source_urls=True,
+            redact_manifest=True,
+        ),
     )
 
     root_markdown = read(output / result.pages[0].index_md)
@@ -443,7 +609,7 @@ def test_validate_rejects_ai_manifest_without_path_base(tmp_path: Path) -> None:
     extract(
         client=client,
         root=PageSummary(page_id="255", title="Root"),
-        options=PullOptions(output=output, force=True),
+        options=PullOptions(output=output, force=True, output_mode="full"),
     )
     manifest = yaml.safe_load((output / "manifest.yaml").read_text(encoding="utf-8"))
     ai_manifest_path = output / manifest["paths"]["ai_manifest"]
@@ -548,7 +714,7 @@ def test_validate_rejects_secret_marker_in_html(tmp_path: Path) -> None:
     result = extract(
         client=client,
         root=PageSummary(page_id="425", title="Secret HTML"),
-        options=PullOptions(output=output, force=True),
+        options=PullOptions(output=output, force=True, output_mode="full"),
     )
     html_path = output / result.pages[0].index_html
     html_path.write_text('<input type="hidden" name="atl_token" value="abc123">', encoding="utf-8")

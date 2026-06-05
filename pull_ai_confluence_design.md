@@ -14,7 +14,7 @@
 
 `confpub` is optimized for high-fidelity round-tripping between Markdown and Confluence. `pull` is optimized for a different job: capturing what a human reader would currently see on the published Confluence page, including rendered macro output, images, diagrams, attachment references, and page-tree relationships, while making that content easy for a large language model to read, cite, chunk, and inspect.
 
-The core output is not just Markdown. It is a structured local package:
+The default output mode is `simple`: root AI Markdown, page Markdown, assets/sidecars, and validation control files. `--output-mode full` writes the broader evidence package:
 
 ```text
 pulled-confluence/
@@ -26,6 +26,7 @@ pulled-confluence/
 │       ├── index.html
 │       ├── source.storage.xml
 │       ├── page.json
+│       ├── comments.md
 │       └── assets/
 │           ├── system-context.png
 │           ├── system-context.gliffy
@@ -37,7 +38,7 @@ pulled-confluence/
     └── unresolved-links.md
 ```
 
-The design goal is simple: an AI agent should be able to read `manifest.yaml` and `bundle.md`, then inspect linked page and asset files as needed, without guessing where content came from or whether links/assets/macros were lost.
+The design goal is simple: an AI agent should be able to start from the root AI Markdown file, then inspect linked page, comment, and asset files as needed, without guessing where content came from or whether links/assets/macros were lost. Full mode keeps `manifest.yaml` and `bundle.md` useful for deeper validation, search, and provenance work.
 
 ---
 
@@ -163,12 +164,15 @@ If multiple pages match a title, return `ERR_VALIDATION_AMBIGUOUS_PAGE` with can
 
 ### 5.4 Output formats
 
+`--output-mode simple` is the default. It writes the root AI Markdown/YAML files, `manifest.yaml`, diagnostics, page `index.md`, page `page.json`, optional `comments.md` sidecars, and assets/sidecars. `--output-mode full` additionally writes `bundle.md`, page `index.html`, and `source.storage.xml` where available. Artifact flags such as `--bundle`, `--html`, and `--source` override the selected mode defaults.
+
 For each page:
 
 - `index.md`: AI-optimized Markdown derived from rendered page and macro adapters.
 - `index.html`: cleaned rendered HTML snapshot with local asset links.
 - `source.storage.xml`: original storage format or ADF JSON sidecar, when available.
 - `page.json`: raw metadata and selected raw API representations.
+- `comments.md`: optional page-local comment sidecar written only with `--comments` when comments exist.
 - `assets/`: page-local assets.
 
 For the whole pull:
@@ -208,6 +212,7 @@ Options:
 --no-assets             # text only; keep original links and warnings
 --extract-attachments   # create text sidecars for PDF/DOCX/XLSX/PPTX/SVG where possible
 --diagram-sources       # try harder to download original diagram source files
+--comments              # fetch page and inline comments into comments.md sidecars
 ```
 
 ### 5.7 Macro conversion
@@ -331,10 +336,12 @@ Output:
   --force                      Overwrite existing output directory
   --clean                      Delete stale files in output directory before writing
   --layout nested|flat         Default nested for --tree, flat for single page
-  --bundle / --no-bundle       Write bundle.md; default true
-  --html / --no-html           Write cleaned rendered HTML; default true
-  --source / --no-source       Write source.storage.xml or source.adf.json; default true
+  --output-mode simple|full    Default simple; full writes bundle/html/source artifacts
+  --bundle / --no-bundle       Write bundle.md; default mode-dependent
+  --html / --no-html           Write cleaned rendered HTML; default mode-dependent
+  --source / --no-source       Write source.storage.xml or source.adf.json; default mode-dependent
   --chunks                     Write chunks.jsonl
+  --comments                   Fetch page and inline comments into comments.md sidecars
 
 Assets:
   --assets visible|page|all    Asset policy; default visible
@@ -453,6 +460,7 @@ pulled-confluence/
 │       ├── index.html
 │       ├── source.storage.xml
 │       ├── page.json
+│       ├── comments.md
 │       └── assets/
 │           ├── diagram.png
 │           ├── diagram.gliffy
@@ -1731,7 +1739,7 @@ AI agents need to know what they are reading, where it came from, which assets e
 4. Should `bundle.md` inline extracted attachment text by default when small?
 5. Should source storage/ADF sidecars be default-on in enterprise contexts, or only with `--source`?
 6. Which diagram apps are first-class in the MVP: Gliffy only, or Gliffy + draw.io + Mermaid?
-7. Should page comments be supported as an optional `--include-comments` mode?
+7. Should page comments be supported as an optional `--comments` mode?
 8. Should labels, page properties, and version history be included by default in `page.json` only, or summarized in Markdown too?
 
 Recommended answers for MVP:
@@ -1742,7 +1750,7 @@ Recommended answers for MVP:
 4. Do not inline extracted attachment text by default; link sidecars.
 5. Default `--source` on for debuggability; allow `--no-source`.
 6. Gliffy + generic diagram image support in MVP; draw.io/Mermaid next.
-7. Exclude comments by default; add `--include-comments` later.
+7. Exclude comments by default; support opt-in `--comments` sidecars.
 8. Include full metadata in `page.json`; summarize only source/version in Markdown.
 
 ---
