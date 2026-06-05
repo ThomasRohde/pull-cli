@@ -18,7 +18,7 @@ def guide_payload() -> dict[str, object]:
                 "options": {
                     "scope": ["--tree", "--depth N", "--max-pages N"],
                     "output": [
-                        "-o/--output PATH",
+                        "-o/--output PATH (default: ./pulled-confluence under the current working directory)",
                         "--output-mode simple|full",
                         "--force",
                         "--clean",
@@ -42,6 +42,11 @@ def guide_payload() -> dict[str, object]:
                 "full": "Writes the current full evidence package: bundle.md, page index.html snapshots, source.storage.xml when available, page.json, manifests, diagnostics, and assets.",
                 "overrides": "--bundle/--no-bundle, --html/--no-html, --source/--no-source, and --chunks override mode defaults.",
                 "clean": "Use --clean when switching modes if you need the physical output tree to contain only files from the new mode.",
+            },
+            "common_ai_use": {
+                "command": "pull PAGE_URL --tree --comments --clean -o ./pulled-confluence",
+                "agent_entry": "./pulled-confluence/<sanitized-root-page-title>.md",
+                "rule": "Give the generated root AI Markdown file to the agent as the starting point.",
             },
             "simple_root_files": [
                 "<sanitized-root-page-title>.md",
@@ -102,6 +107,7 @@ def guide_payload() -> dict[str, object]:
             "pull 123456 -o pulled",
             "pull --page-id 123456 --output-mode full -o pulled-full",
             "pull \"https://example.atlassian.net/wiki/spaces/EA/pages/123456/Architecture\" -o pulled",
+            "pull \"https://example.atlassian.net/wiki/spaces/EA/pages/123456/Architecture\" --tree --comments --clean -o pulled-confluence",
             "pull --page-id 123456 --tree --depth 2 --assets all -o pulled-tree",
             "pull --page-id 123456 --tree --comments -o pulled-comments",
             "pull validate pulled-tree",

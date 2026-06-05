@@ -19,6 +19,8 @@ from .resolver import resolve_target
 from .security import sanitize_url
 from .validator import validate_package
 
+DEFAULT_OUTPUT_DIRNAME = "pulled-confluence"
+
 
 class PullArgumentParser(argparse.ArgumentParser):
     def __init__(self, *args, json_mode: bool = False, command: str = "pull", **kwargs) -> None:
@@ -77,6 +79,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _main_pull(argv: Sequence[str]) -> int:
     parser = _pull_parser(json_mode=_argv_wants_json(argv))
+    if not argv and not _argv_wants_json(argv):
+        parser.print_help()
+        return EXIT_SUCCESS
     ns = parser.parse_args(argv)
     json_mode = wants_json(ns.json)
     started = time.perf_counter()
@@ -96,7 +101,7 @@ def _main_pull(argv: Sequence[str]) -> int:
         title=ns.title,
     )
     options = PullOptions(
-        output=Path(ns.output),
+        output=_output_path(ns.output),
         force=ns.force,
         clean=ns.clean,
         tree=ns.tree,
@@ -162,6 +167,9 @@ def _main_pull(argv: Sequence[str]) -> int:
             f"Pulled {len(result.pages)} page(s), {len(result.assets)} asset(s), "
             f"{len(result.warnings)} warning(s) into {result.output_dir}"
         )
+        if result.ai_entry_path:
+            print(f"AI entry: {result.ai_entry_path.resolve()}")
+            print("Give that Markdown file to the agent as the starting point.")
     return EXIT_SUCCESS
 
 
@@ -247,7 +255,10 @@ def _main_guide(argv: Sequence[str]) -> int:
         print("Commands: pull PAGE_REF [OPTIONS], pull validate PATH, pull guide --json")
         print("Use --json or LLM=true for stable agent envelopes on pull/validate.")
         print("Recommended agent flow: pull guide --json, pull ... --json, pull validate <output-dir> --json.")
+        print("Most common AI use: pull PAGE_URL --tree --comments --clean -o ./pulled-confluence")
+        print("Then give the generated <sanitized-root-page-title>.md file to the agent.")
         print("Default output mode is simple: root AI Markdown, page Markdown, assets, and validation control files.")
+        print("Default output directory is ./pulled-confluence under your current working directory.")
         print("Use --output-mode full for bundle.md, page HTML snapshots, and source.storage.xml; use --clean to remove stale files when switching modes.")
         print("Start analysis from <sanitized-root-page-title>.md in the output package.")
         print("Manifest and AI manifest paths are package-root-relative; page links are page-file-relative.")
@@ -260,11 +271,23 @@ def _pull_parser(*, json_mode: bool = False) -> argparse.ArgumentParser:
         prog="pull",
         description="Pull Confluence pages into local AI-consumable evidence packages.",
         epilog=(
-            "Commands: pull PAGE_REF [OPTIONS]; pull validate MANIFEST_OR_OUTPUT_DIR [--json]; "
-            "pull guide [--json]; pull version. "
-            "Default output mode is simple; use --output-mode full for bundle/html/source artifacts. "
-            "Agent flow: pull guide --json, pull ... --json, pull validate <output-dir> --json."
+            "Commands:\n"
+            "  pull PAGE_REF [OPTIONS]\n"
+            "  pull validate MANIFEST_OR_OUTPUT_DIR [--json]\n"
+            "  pull guide [--json]\n"
+            "  pull version\n\n"
+            "Most common AI use:\n"
+            "  pull PAGE_URL --tree --comments --clean -o ./pulled-confluence\n"
+            "  Give ./pulled-confluence/<sanitized-root-page-title>.md to the agent.\n\n"
+            "Defaults:\n"
+            "  When -o is omitted, output goes to ./pulled-confluence under the current working directory.\n"
+            "  Default output mode is simple; use --output-mode full for bundle/html/source artifacts.\n\n"
+            "Agent flow:\n"
+            "  pull guide --json\n"
+            "  pull ... --json\n"
+            "  pull validate <output-dir> --json"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         json_mode=json_mode,
         command="pull",
     )
@@ -279,7 +302,12 @@ def _pull_parser(*, json_mode: bool = False) -> argparse.ArgumentParser:
     parser.add_argument("--max-pages", type=int, default=500, help="Safety cap for tree pulls.")
     parser.add_argument("--include-non-page-children", action="store_true")
 
-    parser.add_argument("-o", "--output", default="pulled-confluence", help="Output directory.")
+    parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Output directory. Default: ./pulled-confluence under the current working directory.",
+    )
     parser.add_argument("--force", action="store_true", help="Overwrite files in an existing output directory.")
     parser.add_argument("--clean", action="store_true", help="Delete stale files in the output directory first.")
     parser.add_argument("--layout", choices=["auto", "nested", "flat"], default="auto")
@@ -327,3 +355,9 @@ def _pull_parser(*, json_mode: bool = False) -> argparse.ArgumentParser:
 
 def _argv_wants_json(argv: Sequence[str]) -> bool:
     return "--json" in argv or wants_json(False)
+
+
+def _output_path(value: str | None) -> Path:
+    if value:
+        return Path(value)
+    return Path.cwd() / DEFAULT_OUTPUT_DIRNAME

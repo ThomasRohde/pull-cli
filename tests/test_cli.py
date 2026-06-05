@@ -33,15 +33,16 @@ def test_pull_json_failure_envelope_without_target(capsys, monkeypatch) -> None:
     assert payload["errors"][0]["code"] == "ERR_VALIDATION_REQUIRED"
 
 
-def test_pull_human_failure_without_target_uses_stderr(capsys, monkeypatch) -> None:
+def test_pull_without_arguments_displays_help(capsys, monkeypatch) -> None:
     monkeypatch.delenv("LLM", raising=False)
     monkeypatch.delenv("PULL_URL", raising=False)
     monkeypatch.delenv("CONFPUB_URL", raising=False)
-    assert main([]) == 10
+    assert main([]) == 0
     captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "ERR_VALIDATION_REQUIRED" in captured.err
-    assert "Suggested action:" in captured.err
+    assert captured.err == ""
+    assert "usage: pull" in captured.out
+    assert "Most common AI use:" in captured.out
+    assert "./pulled-confluence/<sanitized-root-page-title>.md" in captured.out
 
 
 def test_pull_json_failure_envelope_for_invalid_argument(capsys) -> None:
@@ -86,14 +87,18 @@ def test_help_mentions_agent_commands(capsys) -> None:
     assert "pull guide [--json]" in stdout
     assert "--output-mode" in stdout
     assert "Agent flow:" in stdout
+    assert "Most common AI use:" in stdout
+    assert "current working directory" in stdout
 
 
 def test_human_guide_mentions_path_rules(capsys) -> None:
     assert main(["guide"]) == 0
     stdout = capsys.readouterr().out
     assert "Recommended agent flow:" in stdout
+    assert "Most common AI use:" in stdout
     assert "package-root-relative" in stdout
     assert "Default output mode is simple" in stdout
+    assert "./pulled-confluence" in stdout
     assert "--output-mode full" in stdout
 
 
@@ -140,6 +145,37 @@ def test_pull_json_reports_simple_default_and_ai_entry(capsys, monkeypatch, tmp_
     assert not (output / "bundle.md").exists()
     assert not any((output / "pages").rglob("index.html"))
     assert not any((output / "pages").rglob("source.storage.xml"))
+
+
+def test_pull_human_success_prints_ai_entry(capsys, monkeypatch, tmp_path: Path) -> None:
+    page = make_page("904", "CLI Human", body_view="<h1>CLI Human</h1>")
+    client = FakeConfluenceClient(pages={"904": page})
+    monkeypatch.setattr(cli, "build_client", lambda _config: client)
+    output = tmp_path / "cli-human"
+
+    assert main(["--page-id", "904", "--output", str(output), "--clean"]) == 0
+
+    captured = capsys.readouterr()
+    assert "Pulled 1 page(s)" in captured.out
+    assert "AI entry:" in captured.out
+    assert str((output / "cli-human.md").resolve()) in captured.out
+    assert "Give that Markdown file to the agent" in captured.out
+
+
+def test_pull_default_output_is_current_working_directory(capsys, monkeypatch, tmp_path: Path) -> None:
+    page = make_page("905", "CLI Default Output", body_view="<h1>CLI Default Output</h1>")
+    client = FakeConfluenceClient(pages={"905": page})
+    monkeypatch.setattr(cli, "build_client", lambda _config: client)
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["--page-id", "905", "--base-url", "https://example.atlassian.net/wiki"]) == 0
+
+    output = tmp_path / "pulled-confluence"
+    assert output.exists()
+    assert (output / "cli-default-output.md").exists()
+    captured = capsys.readouterr()
+    assert str(output) in captured.out
+    assert str((output / "cli-default-output.md").resolve()) in captured.out
 
 
 def test_output_mode_artifact_flags_override_defaults(capsys, monkeypatch, tmp_path: Path) -> None:

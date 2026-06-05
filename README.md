@@ -37,6 +37,16 @@ pull --page-id 123456 -o pulled-confluence
 
 `CONFPUB_URL`, `CONFPUB_USER`, `CONFPUB_TOKEN`, and `CONFPUB_SSL_VERIFY` are accepted as compatibility fallbacks after `PULL_*` variables.
 
+For the most common AI handoff, pull the whole page tree and point the agent at the generated root Markdown file:
+
+```bash
+pull "https://example.atlassian.net/wiki/spaces/EA/pages/123456/Architecture" --tree --comments --clean -o pulled-confluence
+```
+
+Then give the agent `pulled-confluence/<sanitized-root-page-title>.md`.
+
+Running `pull` without arguments prints help. If `-o/--output` is omitted, output is written to `./pulled-confluence` under the current working directory.
+
 ## CLI Examples
 
 ```bash
@@ -44,6 +54,7 @@ pull 123456 -o pulled
 pull "https://example.atlassian.net/wiki/spaces/EA/pages/123456/Architecture" -o pulled
 pull --space EA --title "Architecture Overview" -o pulled
 pull --page-id 123456 --tree --depth 3 --max-pages 100 -o tree
+pull "https://example.atlassian.net/wiki/spaces/EA/pages/123456/Architecture" --tree --comments --clean -o pulled-confluence
 pull --page-id 123456 --tree --assets all --extract-attachments -o offline
 pull --page-id 123456 --tree --comments -o with-comments
 pull --page-id 123456 --output-mode full -o full-evidence
