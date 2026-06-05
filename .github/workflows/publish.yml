@@ -1,0 +1,54 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build and publish distribution
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pull-cli/
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Check release tag matches package version
+        run: |
+          package_version="$(uv run python -c 'import pull_cli; print(pull_cli.__version__)')"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$package_version" != "$tag_version" ]; then
+            echo "Release tag $GITHUB_REF_NAME does not match package version $package_version"
+            exit 1
+          fi
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Check distribution metadata
+        run: uvx --from twine twine check dist/*
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

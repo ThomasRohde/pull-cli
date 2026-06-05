@@ -171,6 +171,10 @@ uv run pull validate .tmp/generated-fixture
 
 Live smoke testing requires a readable Confluence page and credentials through `PULL_*` or `CONFPUB_*`.
 
+## Releasing
+
+Versions are managed from `src/pull_cli/__init__.py` through Hatch. Use `uv run hatch version patch`, `uv run hatch version minor`, or `uv run hatch version major`; `pull --version`, built package metadata, and GitHub release tags are expected to match. See [RELEASING.md](RELEASING.md) for the PyPI trusted publisher setup and release flow.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

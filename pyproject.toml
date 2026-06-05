@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pull-cli"
-version = "0.1.0"
+dynamic = ["version"]
 description = "AI-optimized Confluence evidence package extractor"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -44,6 +44,7 @@ extract = [
   "openpyxl>=3.1.5",
 ]
 dev = [
+  "hatch>=1.14.0",
   "pytest>=8.3.0",
   "ruff>=0.6.9",
 ]
@@ -54,6 +55,9 @@ pull-cli = "pull_cli.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pull_cli"]
+
+[tool.hatch.version]
+path = "src/pull_cli/__init__.py"
 
 [tool.ruff]
 line-length = 100

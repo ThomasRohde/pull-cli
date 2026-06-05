@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
 
+import pull_cli
 import pull_cli.cli as cli
 from pull_cli.cli import main
 
@@ -69,9 +71,10 @@ def test_version_commands(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["--version"])
     assert exc_info.value.code == 0
-    assert capsys.readouterr().out.startswith("pull-cli ")
+    assert capsys.readouterr().out == f"pull-cli {pull_cli.__version__}\n"
     assert main(["version"]) == 0
-    assert capsys.readouterr().out.startswith("pull-cli ")
+    assert capsys.readouterr().out == f"pull-cli {pull_cli.__version__}\n"
+    assert version("pull-cli") == pull_cli.__version__
 
 
 def test_help_mentions_agent_commands(capsys) -> None:
