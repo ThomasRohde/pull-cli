@@ -1,7 +1,17 @@
 .venv/
 .tmp/
 dist/
+build/
 __pycache__/
 .pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 *.py[cod]
 *.egg-info/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db

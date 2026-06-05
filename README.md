@@ -170,3 +170,7 @@ uv run pull validate .tmp/generated-fixture
 ```
 
 Live smoke testing requires a readable Confluence page and credentials through `PULL_*` or `CONFPUB_*`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

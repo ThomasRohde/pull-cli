@@ -9,12 +9,14 @@ description = "AI-optimized Confluence evidence package extractor"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Thomas Rohde" }]
+authors = [{ name = "Thomas Rohde", email = "rohde.thomas@gmail.com" }]
 keywords = ["confluence", "atlassian", "cli", "markdown", "ai"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
   "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -27,6 +29,11 @@ dependencies = [
   "markdownify>=0.13.1",
   "PyYAML>=6.0.2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ThomasRohde/pull-cli"
+Repository = "https://github.com/ThomasRohde/pull-cli"
+Issues = "https://github.com/ThomasRohde/pull-cli/issues"
 
 [project.optional-dependencies]
 extract = [
