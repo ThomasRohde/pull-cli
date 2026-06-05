@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pull-cli"
+version = "0.1.0"
+description = "AI-optimized Confluence evidence package extractor"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Thomas Rohde" }]
+keywords = ["confluence", "atlassian", "cli", "markdown", "ai"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "atlassian-python-api>=4.0.7",
+  "beautifulsoup4>=4.12.3",
+  "lxml>=5.2.0",
+  "markdownify>=0.13.1",
+  "PyYAML>=6.0.2",
+]
+
+[project.optional-dependencies]
+extract = [
+  "defusedxml>=0.7.1",
+  "pypdf>=5.0.0",
+  "python-docx>=1.1.2",
+  "python-pptx>=1.0.2",
+  "openpyxl>=3.1.5",
+]
+dev = [
+  "pytest>=8.3.0",
+  "ruff>=0.6.9",
+]
+
+[project.scripts]
+pull = "pull_cli.cli:main"
+pull-cli = "pull_cli.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pull_cli"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,0 +1,27 @@
+from __future__ import annotations
+
+from typing import Protocol
+
+from pull_cli.models import AttachmentRecord, PageRecord, PageSummary
+
+
+class ConfluenceClient(Protocol):
+    base_url: str
+    deployment_type: str
+    api_calls: int
+
+    def get_page(self, page_id: str) -> PageRecord: ...
+
+    def find_page(self, space: str, title: str) -> list[PageSummary]: ...
+
+    def get_children(self, page_id: str) -> list[PageSummary]: ...
+
+    def get_descendants(self, page_id: str, depth: int | None = None) -> list[PageSummary]: ...
+
+    def list_attachments(self, page_id: str) -> list[AttachmentRecord]: ...
+
+    def download_attachment(self, attachment: AttachmentRecord) -> bytes: ...
+
+    def download_url(self, url: str) -> bytes: ...
+
+    def close(self) -> None: ...
