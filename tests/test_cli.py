@@ -5,6 +5,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 import pytest
+import urllib3
 
 import pull_cli
 import pull_cli.cli as cli
@@ -21,6 +22,8 @@ def test_guide_json_is_plain_json(capsys) -> None:
     assert "pull" in payload["commands"]
     assert payload["output_schema"]["default_mode"] == "simple"
     assert "--output-mode simple|full" in payload["commands"]["pull"]["options"]["output"]
+    assert "--auth auto|bearer|basic" in payload["commands"]["pull"]["options"]["auth"]
+    assert payload["auth"]["mode_default"] == "auto"
 
 
 def test_pull_json_failure_envelope_without_target(capsys, monkeypatch) -> None:
@@ -239,3 +242,95 @@ def test_output_mode_artifact_flags_override_defaults(capsys, monkeypatch, tmp_p
     assert not (full_output / "bundle.md").exists()
     assert not any((full_output / "pages").rglob("index.html"))
     assert not any((full_output / "pages").rglob("source.storage.xml"))
+
+
+def test_cli_token_without_user_ignores_legacy_user_env(capsys, monkeypatch, tmp_path: Path) -> None:
+    page = make_page("906", "CLI Bearer", body_view="<h1>CLI Bearer</h1>")
+    client = FakeConfluenceClient(pages={"906": page})
+    captured = {}
+
+    def build_client(config):
+        captured["config"] = config
+        return client
+
+    monkeypatch.setenv("CONFPUB_USER", "legacy-user")
+    monkeypatch.setenv("CONFPUB_TOKEN", "legacy-token")
+    monkeypatch.setattr(cli, "build_client", build_client)
+
+    assert (
+        main(
+            [
+                "--page-id",
+                "906",
+                "--base-url",
+                "https://confluence.example.com",
+                "--token",
+                "explicit-pat",
+                "--output",
+                str(tmp_path / "cli-bearer"),
+                "--clean",
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    config = captured["config"]
+    assert config.token == "explicit-pat"
+    assert config.user is None
+    assert config.auth_mode == "auto"
+
+
+def test_cli_auth_basic_can_use_legacy_user_env(capsys, monkeypatch, tmp_path: Path) -> None:
+    page = make_page("907", "CLI Basic", body_view="<h1>CLI Basic</h1>")
+    client = FakeConfluenceClient(pages={"907": page})
+    captured = {}
+
+    def build_client(config):
+        captured["config"] = config
+        return client
+
+    monkeypatch.setenv("CONFPUB_USER", "legacy-user")
+    monkeypatch.setattr(cli, "build_client", build_client)
+
+    assert (
+        main(
+            [
+                "--page-id",
+                "907",
+                "--base-url",
+                "https://confluence.example.com",
+                "--token",
+                "explicit-pat",
+                "--auth",
+                "basic",
+                "--output",
+                str(tmp_path / "cli-basic"),
+                "--clean",
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    config = captured["config"]
+    assert config.token == "explicit-pat"
+    assert config.user == "legacy-user"
+    assert config.auth_mode == "basic"
+
+
+def test_ssl_verify_false_suppresses_urllib3_warning(monkeypatch) -> None:
+    called = {}
+
+    def disable_warnings(category=None):
+        called["category"] = category
+
+    monkeypatch.setattr(urllib3, "disable_warnings", disable_warnings)
+
+    cli._suppress_insecure_request_warnings(False)
+
+    assert called["category"] is urllib3.exceptions.InsecureRequestWarning

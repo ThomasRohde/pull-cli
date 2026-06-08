@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from pull_cli.clients.cloud_v2 import CloudV2Client
 from pull_cli.clients.data_center import DataCenterClient
+from pull_cli.errors import PullError
 from pull_cli.models import AttachmentRecord, Config
 
 
@@ -117,6 +120,56 @@ def test_data_center_client_fetches_paginated_footer_and_inline_comments() -> No
     assert comment_calls[0][2]["depth"] == "all"
     assert comment_calls[1][2]["start"] == 100
     assert comment_calls[-1][2]["location"] == "inline"
+
+
+def test_data_center_client_builds_bearer_token_auth(monkeypatch) -> None:
+    captured: list[dict[str, object]] = []
+
+    class CapturingConfluence:
+        def __init__(self, **kwargs) -> None:
+            captured.append(kwargs)
+
+    monkeypatch.setattr("pull_cli.clients.data_center.Confluence", CapturingConfluence)
+
+    DataCenterClient(
+        Config(base_url="https://confluence.example.com/confluence", token="dc-pat", auth_mode="bearer")
+    )
+
+    assert captured[-1]["token"] == "dc-pat"
+    assert "username" not in captured[-1]
+    assert "password" not in captured[-1]
+
+
+def test_data_center_client_auto_uses_basic_when_user_and_token_exist(monkeypatch) -> None:
+    captured: list[dict[str, object]] = []
+
+    class CapturingConfluence:
+        def __init__(self, **kwargs) -> None:
+            captured.append(kwargs)
+
+    monkeypatch.setattr("pull_cli.clients.data_center.Confluence", CapturingConfluence)
+
+    DataCenterClient(
+        Config(base_url="https://confluence.example.com/confluence", user="u", token="t")
+    )
+
+    assert captured[-1]["username"] == "u"
+    assert captured[-1]["password"] == "t"
+    assert "token" not in captured[-1]
+
+
+def test_data_center_client_basic_auth_requires_user() -> None:
+    with pytest.raises(PullError) as exc_info:
+        DataCenterClient(
+            Config(
+                base_url="https://confluence.example.com/confluence",
+                token="dc-pat",
+                auth_mode="basic",
+            )
+        )
+
+    assert exc_info.value.code == "ERR_VALIDATION_REQUIRED"
+    assert "--auth bearer" in (exc_info.value.suggested_action or "")
 
 
 def _comment_payload(comment_id: str, *, location: str | None = None) -> dict[str, object]:

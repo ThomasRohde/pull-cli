@@ -6,7 +6,7 @@ from typing import Any
 
 import yaml
 
-from .models import Config
+from .models import AuthMode, Config
 
 
 def _coerce_ssl_verify(value: str | bool | None) -> bool | str:
@@ -33,11 +33,23 @@ def _load_config_file(path: Path | None) -> dict[str, Any]:
     return data
 
 
+def _coerce_auth_mode(value: str | None) -> AuthMode:
+    if not value:
+        return "auto"
+    lowered = value.strip().lower()
+    if lowered == "bearer":
+        return "bearer"
+    if lowered == "basic":
+        return "basic"
+    return "auto"
+
+
 def resolve_config(
     *,
     base_url: str | None = None,
     user: str | None = None,
     token: str | None = None,
+    auth_mode: str | None = None,
     cloud_id: str | None = None,
     ssl_verify: str | bool | None = None,
     config_path: str | Path | None = None,
@@ -46,6 +58,19 @@ def resolve_config(
     env_map = env if env is not None else os.environ
     path = Path(config_path).expanduser() if config_path else None
     file_data = _load_config_file(path)
+    resolved_auth_mode = _coerce_auth_mode(
+        auth_mode or env_map.get("PULL_AUTH") or file_data.get("auth_mode")
+    )
+    explicit_token_without_user = token is not None and user is None
+    user_value = user
+    if user_value is None and resolved_auth_mode != "bearer" and not (
+        explicit_token_without_user and resolved_auth_mode == "auto"
+    ):
+        user_value = (
+            env_map.get("PULL_USER")
+            or file_data.get("user")
+            or env_map.get("CONFPUB_USER")
+        )
 
     resolved = Config(
         base_url=(
@@ -54,18 +79,14 @@ def resolve_config(
             or file_data.get("base_url")
             or env_map.get("CONFPUB_URL")
         ),
-        user=(
-            user
-            or env_map.get("PULL_USER")
-            or file_data.get("user")
-            or env_map.get("CONFPUB_USER")
-        ),
+        user=user_value,
         token=(
             token
             or env_map.get("PULL_TOKEN")
             or file_data.get("token")
             or env_map.get("CONFPUB_TOKEN")
         ),
+        auth_mode=resolved_auth_mode,
         cloud_id=cloud_id or env_map.get("PULL_CLOUD_ID") or file_data.get("cloud_id"),
         ssl_verify=_coerce_ssl_verify(
             ssl_verify

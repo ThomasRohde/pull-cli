@@ -2,17 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 import yaml
 
 from .models import WarningRecord
-from .security import contains_secret_text
-
-LOCAL_LINK_RE = re.compile(r"\[[^\]]*]\(([^)]+)\)")
+from .security import secret_findings
 
 
 @dataclass
@@ -23,6 +21,14 @@ class ValidationResult:
     errors: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[WarningRecord] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MarkdownLink:
+    target: str
+    line: int
+    kind: str
+    text: str
 
 
 def validate_package(path: Path) -> ValidationResult:
@@ -150,8 +156,8 @@ def _check_relative_file(
 
 def _check_markdown_links(result: ValidationResult, markdown_path: Path, output_dir: Path) -> None:
     text = markdown_path.read_text(encoding="utf-8")
-    for match in LOCAL_LINK_RE.finditer(text):
-        target = _markdown_link_destination(match.group(1))
+    for link in _iter_markdown_links(text):
+        target = _markdown_link_destination(link.target)
         if not target or target in {"redacted-url", "<redacted-url>"} or target.startswith(("#", "/", "http://", "https://", "mailto:", "jira:")):
             continue
         target_path = target.split("#", 1)[0]
@@ -160,6 +166,7 @@ def _check_markdown_links(result: ValidationResult, markdown_path: Path, output_
         details = {
             "link": target,
             "file": str(markdown_path),
+            "line": link.line,
             "resolution_base": str(resolution_base),
             "candidate_path": str(candidate_path),
         }
@@ -251,10 +258,9 @@ def _check_redacted_rewritten_links(
 def _redacted_markdown_link_lines(markdown_path: Path) -> list[dict[str, Any]]:
     examples = []
     for line_number, line in enumerate(markdown_path.read_text(encoding="utf-8").splitlines(), start=1):
-        for match in LOCAL_LINK_RE.finditer(line):
-            if _markdown_link_destination(match.group(1)) == "redacted-url":
-                kind = "image" if match.start() > 0 and line[match.start() - 1] == "!" else "link"
-                examples.append({"line": line_number, "kind": kind, "text": line.strip()})
+        for link in _iter_markdown_links(line, start_line=line_number):
+            if _markdown_link_destination(link.target) == "redacted-url":
+                examples.append({"line": link.line, "kind": link.kind, "text": link.text.strip()})
     return examples
 
 
@@ -361,11 +367,90 @@ def _markdown_link_destination(raw: str) -> str:
     target = raw.strip()
     if target.startswith("<"):
         end = target.find(">")
-        return target[1:end] if end != -1 else target.strip("<>")
+        return unquote(target[1:end] if end != -1 else target.strip("<>"))
     for marker in (' "', " '", "\t\"", "\t'"):
         if marker in target:
-            return target.split(marker, 1)[0].strip()
-    return target
+            return unquote(target.split(marker, 1)[0].strip())
+    return unquote(target)
+
+
+def _iter_markdown_links(text: str, *, start_line: int = 1) -> list[MarkdownLink]:
+    links: list[MarkdownLink] = []
+    for offset, line in enumerate(text.splitlines(), start=0):
+        line_number = start_line + offset
+        index = 0
+        while index < len(line):
+            open_bracket = line.find("[", index)
+            if open_bracket == -1:
+                break
+            if open_bracket > 0 and line[open_bracket - 1] == "\\":
+                index = open_bracket + 1
+                continue
+            close_bracket = _find_label_end(line, open_bracket)
+            if close_bracket == -1:
+                break
+            if close_bracket + 1 >= len(line) or line[close_bracket + 1] != "(":
+                index = close_bracket + 1
+                continue
+            raw_target, close_paren = _parse_link_target(line, close_bracket + 2)
+            if close_paren == -1:
+                index = close_bracket + 1
+                continue
+            kind = "image" if open_bracket > 0 and line[open_bracket - 1] == "!" else "link"
+            links.append(MarkdownLink(target=raw_target, line=line_number, kind=kind, text=line))
+            index = close_paren + 1
+    return links
+
+
+def _find_label_end(line: str, start: int) -> int:
+    index = start + 1
+    while index < len(line):
+        if line[index] == "\\":
+            index += 2
+            continue
+        if line[index] == "]":
+            return index
+        index += 1
+    return -1
+
+
+def _parse_link_target(line: str, start: int) -> tuple[str, int]:
+    index = start
+    while index < len(line) and line[index].isspace():
+        index += 1
+    if index >= len(line):
+        return "", -1
+    if line[index] == "<":
+        end_angle = line.find(">", index + 1)
+        if end_angle == -1:
+            return "", -1
+        close_paren = line.find(")", end_angle + 1)
+        if close_paren == -1:
+            return "", -1
+        return line[index : end_angle + 1], close_paren
+    depth = 0
+    chars: list[str] = []
+    while index < len(line):
+        char = line[index]
+        if char == "\\" and index + 1 < len(line):
+            chars.append(line[index + 1])
+            index += 2
+            continue
+        if char == "(":
+            depth += 1
+            chars.append(char)
+            index += 1
+            continue
+        if char == ")":
+            if depth == 0:
+                return "".join(chars).strip(), index
+            depth -= 1
+            chars.append(char)
+            index += 1
+            continue
+        chars.append(char)
+        index += 1
+    return "", -1
 
 
 def _scan_for_secret_markers(result: ValidationResult, output_dir: Path) -> None:
@@ -373,12 +458,18 @@ def _scan_for_secret_markers(result: ValidationResult, output_dir: Path) -> None
         if not path.is_file() or path.suffix.lower() not in {".yaml", ".yml", ".json", ".jsonl", ".md", ".html", ".xml"}:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
-        if contains_secret_text(text):
+        findings = secret_findings(text)
+        if findings:
+            finding = findings[0]
             _error(
                 result,
                 "ERR_VALIDATION_SECRET_PATTERN",
                 "A secret-like marker was found in a text output file.",
-                {"path": str(path.relative_to(output_dir))},
+                {
+                    "path": str(path.relative_to(output_dir)),
+                    "line": finding.line,
+                    "term": finding.term,
+                },
             )
 
 

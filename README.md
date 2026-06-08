@@ -32,7 +32,7 @@ Data Center or Server:
 ```bash
 set PULL_URL=https://confluence.example.com/confluence
 set PULL_TOKEN=your-personal-access-token
-pull --page-id 123456 -o pulled-confluence
+pull --page-id 123456 --auth bearer -o pulled-confluence
 ```
 
 `CONFPUB_URL`, `CONFPUB_USER`, `CONFPUB_TOKEN`, and `CONFPUB_SSL_VERIFY` are accepted as compatibility fallbacks after `PULL_*` variables.
@@ -59,6 +59,7 @@ pull --page-id 123456 --tree --assets all --extract-attachments -o offline
 pull --page-id 123456 --tree --comments -o with-comments
 pull --page-id 123456 --output-mode full -o full-evidence
 pull --page-id 123456 --output-mode simple --bundle -o simple-with-bundle
+pull --page-id 123456 --auth bearer --token "$token" --ssl-verify false -o data-center-pat
 pull --page-id 123456 --json -o pulled
 pull validate pulled
 pull guide --json
@@ -117,6 +118,14 @@ Resolution order:
 4. `CONFPUB_*` compatibility environment variables.
 
 `--ssl-verify` accepts `true`, `false`, or a CA bundle path.
+
+`--auth` accepts `auto`, `bearer`, or `basic`. The default `auto` mode preserves username+token Basic auth when a user and token are both resolved. If you pass `--token` without an explicit `--user`, `pull` treats that as token-only auth and does not pair the token with `PULL_USER` or `CONFPUB_USER` from the environment. This makes Data Center PATs work with `Authorization: Bearer <PAT>` even on machines that still have `CONFPUB_USER` set for other tools.
+
+Use `--auth bearer` to force PAT/Bearer token auth and ignore user fallbacks. Use `--auth basic` when your instance expects username/password or username/API-token Basic auth; it requires a resolved user and token.
+
+If a Data Center pull returns `ERR_AUTH_REQUIRED` while a direct request with `Authorization: Bearer <PAT>` succeeds, retry with `--auth bearer` or pass only `--token` and no explicit `--user`. If Basic auth is intended, pass `--auth basic --user <name> --token <token>`.
+
+When `--ssl-verify false` is used intentionally, `pull` suppresses urllib3 `InsecureRequestWarning` so JSON mode remains parseable on stdout.
 
 ## Macro, Asset, and Link Behavior
 

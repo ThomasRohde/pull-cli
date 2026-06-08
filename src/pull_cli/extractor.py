@@ -18,7 +18,7 @@ from .models import (
     PullOptions,
     WarningRecord,
 )
-from .paths import relative_path, slugify
+from .paths import markdown_link_target, relative_path, slugify
 from .security import redact_source_url_text, redact_text
 from .writer import (
     page_markdown_header,
@@ -36,7 +36,6 @@ def extract(
     root: PageSummary,
     options: PullOptions,
 ) -> ExtractionResult:
-    prepare_output_dir(options.output, force=options.force, clean=options.clean)
     summaries = crawl_pages(
         client,
         root,
@@ -44,6 +43,7 @@ def extract(
         depth=options.depth,
         max_pages=options.max_pages,
     )
+    prepare_output_dir(options.output, force=options.force, clean=options.clean)
     page_paths = _page_paths(summaries, options=options)
     pages_by_id = {summary.page_id: summary for summary in summaries}
     registry = MacroRegistry()
@@ -191,7 +191,7 @@ def _attachment_markdown(assets, *, page_index_path: str) -> str:
             asset_link = relative_path(page_index_path, asset.local_path)
             sidecars = (
                 ", ".join(
-                    f"`{sidecar}` ([open]({relative_path(page_index_path, sidecar)}))"
+                    f"`{sidecar}` ([open]({markdown_link_target(relative_path(page_index_path, sidecar))}))"
                     for sidecar in asset.sidecars
                 )
                 or ""
@@ -201,7 +201,7 @@ def _attachment_markdown(assets, *, page_index_path: str) -> str:
                 + " | ".join(
                     [
                         asset.filename,
-                        f"`{asset.local_path}` ([open]({asset_link}))",
+                        f"`{asset.local_path}` ([open]({markdown_link_target(asset_link)}))",
                         asset.media_type or "",
                         sidecars,
                     ]

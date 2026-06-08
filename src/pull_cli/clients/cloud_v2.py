@@ -7,7 +7,7 @@ from atlassian import Confluence
 from pull_cli.models import AttachmentRecord, Config, PageRecord, PageSummary
 from pull_cli.security import redact_value
 
-from .data_center import DataCenterClient
+from .data_center import DataCenterClient, _auth_kwargs
 
 
 class CloudV2Client(DataCenterClient):
@@ -38,11 +38,7 @@ class CloudV2Client(DataCenterClient):
             "backoff_factor": 0.25,
             "backoff_jitter": 0,
         }
-        if config.token and config.user:
-            kwargs["username"] = config.user
-            kwargs["password"] = config.token
-        elif config.token:
-            kwargs["token"] = config.token
+        kwargs.update(_auth_kwargs(config))
         return Confluence(**kwargs)
 
     def _v2_url(self, *parts: str) -> str:

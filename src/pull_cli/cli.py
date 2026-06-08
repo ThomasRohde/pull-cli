@@ -89,10 +89,12 @@ def _main_pull(argv: Sequence[str]) -> int:
         base_url=ns.base_url,
         user=ns.user,
         token=ns.token,
+        auth_mode=ns.auth,
         cloud_id=ns.cloud_id,
         ssl_verify=ns.ssl_verify,
         config_path=ns.config,
     )
+    _suppress_insecure_request_warnings(config.ssl_verify)
     selection = TargetSelection(
         positional=ns.page_ref,
         page_id=ns.page_id,
@@ -259,6 +261,7 @@ def _main_guide(argv: Sequence[str]) -> int:
         print("Then give the generated <sanitized-root-page-title>.md file to the agent.")
         print("Default output mode is simple: root AI Markdown, page Markdown, assets, and validation control files.")
         print("Default output directory is ./pulled-confluence under your current working directory.")
+        print("For Data Center PATs, use --auth bearer or pass --token without --user.")
         print("Use --output-mode full for bundle.md, page HTML snapshots, and source.storage.xml; use --clean to remove stale files when switching modes.")
         print("Start analysis from <sanitized-root-page-title>.md in the output package.")
         print("Manifest and AI manifest paths are package-root-relative; page links are page-file-relative.")
@@ -282,6 +285,9 @@ def _pull_parser(*, json_mode: bool = False) -> argparse.ArgumentParser:
             "Defaults:\n"
             "  When -o is omitted, output goes to ./pulled-confluence under the current working directory.\n"
             "  Default output mode is simple; use --output-mode full for bundle/html/source artifacts.\n\n"
+            "Auth:\n"
+            "  Use --auth bearer for Confluence Data Center PATs; explicit --token without --user\n"
+            "  will not be paired with PULL_USER or CONFPUB_USER.\n\n"
             "Agent flow:\n"
             "  pull guide --json\n"
             "  pull ... --json\n"
@@ -339,6 +345,12 @@ def _pull_parser(*, json_mode: bool = False) -> argparse.ArgumentParser:
     parser.add_argument("--base-url", help="Confluence base URL.")
     parser.add_argument("--user", help="Confluence username/email.")
     parser.add_argument("--token", help="Confluence API token or PAT. Prefer env vars.")
+    parser.add_argument(
+        "--auth",
+        choices=["auto", "bearer", "basic"],
+        default="auto",
+        help="Authentication mode. auto preserves username+token Basic auth unless --token is passed without --user; bearer forces PAT token auth.",
+    )
     parser.add_argument("--cloud-id", help="Optional Confluence Cloud ID.")
     parser.add_argument("--ssl-verify", help="true, false, or path to an enterprise CA bundle.")
     parser.add_argument("--config", help="Optional config YAML path.")
@@ -361,3 +373,13 @@ def _output_path(value: str | None) -> Path:
     if value:
         return Path(value)
     return Path.cwd() / DEFAULT_OUTPUT_DIRNAME
+
+
+def _suppress_insecure_request_warnings(ssl_verify: bool | str) -> None:
+    if ssl_verify is not False:
+        return
+    try:
+        import urllib3
+    except Exception:  # noqa: BLE001
+        return
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)

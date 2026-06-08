@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from pull_cli.errors import PullError
@@ -331,6 +332,33 @@ def test_attachment_macro_ui_is_sanitized_and_replaced_with_read_only_listing(tm
     assert "Thomas Rohde" not in markdown
     assert "## Attachments" in markdown
     assert "| readme.txt | `pages/0001-attachment-ui/assets/readme.txt` ([open](assets/readme.txt))" in markdown
+    assert validate_package(output).ok
+
+
+def test_asset_filenames_with_spaces_and_parentheses_validate(tmp_path: Path) -> None:
+    output = tmp_path / "asset-parentheses"
+    page = make_page(
+        "160",
+        "Asset Parentheses",
+        body_view="""
+        <h1>Asset Parentheses</h1>
+        <p><img src="/download/attachments/160/Fees domain(To-Be).png" alt="Fees domain(To-Be)"></p>
+        """,
+    )
+    client = FakeConfluenceClient(
+        pages={"160": page},
+        downloads={"/download/attachments/160/Fees domain(To-Be).png": b"png-bytes"},
+    )
+
+    result = extract(
+        client=client,
+        root=PageSummary(page_id="160", title="Asset Parentheses"),
+        options=PullOptions(output=output, force=True),
+    )
+
+    markdown = read(output / result.pages[0].index_md)
+    assert "assets/Fees%20domain%28To-Be%29.png" in markdown
+    assert (output / "pages" / "0001-asset-parentheses" / "assets" / "Fees domain(To-Be).png").exists()
     assert validate_package(output).ok
 
 
@@ -707,6 +735,26 @@ def test_manifest_validation_failure(tmp_path: Path) -> None:
     assert validation.errors
 
 
+def test_tree_discovery_failure_does_not_create_output_scaffold(tmp_path: Path) -> None:
+    output = tmp_path / "early-failure"
+    page = make_page("410", "Early Failure", body_view="<h1>Early Failure</h1>")
+
+    class FailingTreeClient(FakeConfluenceClient):
+        def get_children(self, page_id: str) -> list[PageSummary]:
+            raise RuntimeError("tree discovery failed")
+
+    client = FailingTreeClient(pages={"410": page})
+
+    with pytest.raises(RuntimeError):
+        extract(
+            client=client,
+            root=PageSummary(page_id="410", title="Early Failure"),
+            options=PullOptions(output=output, tree=True, force=True),
+        )
+
+    assert not output.exists()
+
+
 def test_validate_rejects_secret_marker_in_html(tmp_path: Path) -> None:
     output = tmp_path / "secret-html"
     page = make_page("425", "Secret HTML", body_view="<h1>Secret HTML</h1>")
@@ -722,6 +770,26 @@ def test_validate_rejects_secret_marker_in_html(tmp_path: Path) -> None:
     validation = validate_package(output)
     assert not validation.ok
     assert validation.errors[-1]["code"] == "ERR_VALIDATION_SECRET_PATTERN"
+    assert validation.errors[-1]["details"]["line"] == 1
+    assert validation.errors[-1]["details"]["term"] == "name=atl_token"
+
+
+def test_validate_does_not_reject_plain_pat_word(tmp_path: Path) -> None:
+    output = tmp_path / "plain-pat"
+    page = make_page("426", "Plain PAT", body_view="<h1>Plain PAT</h1>")
+    client = FakeConfluenceClient(pages={"426": page})
+    result = extract(
+        client=client,
+        root=PageSummary(page_id="426", title="Plain PAT"),
+        options=PullOptions(output=output, force=True),
+    )
+    markdown_path = output / result.pages[0].index_md
+    markdown_path.write_text(
+        markdown_path.read_text(encoding="utf-8") + "\nPAT is an acronym in this paragraph.\n",
+        encoding="utf-8",
+    )
+
+    assert validate_package(output).ok
 
 
 def test_validate_accepts_markdown_title_and_root_relative_web_links(tmp_path: Path) -> None:

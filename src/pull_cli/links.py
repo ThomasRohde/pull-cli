@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 
 from .assets import ATTACHMENT_PATH_RE
 from .models import AssetRecord, LinkRecord, PageSummary, WarningRecord
-from .paths import relative_path
+from .paths import markdown_link_target, relative_path
 from .resolver import page_id_from_url
 
 HEADING_CHARS_RE = re.compile(r"[^a-z0-9 -]")
@@ -36,7 +36,7 @@ def rewrite_html_links(
             continue
         asset = asset_by_original.get(_asset_key(src))
         if asset and rewrite_links:
-            rewritten = relative_path(page_index_path, asset.local_path)
+            rewritten = markdown_link_target(relative_path(page_index_path, asset.local_path))
             tag["src"] = rewritten
             links.append(
                 LinkRecord(
@@ -111,7 +111,7 @@ def _rewrite_href(
 
     asset = asset_by_original.get(_asset_key(href))
     if asset:
-        rewritten = relative_path(page_index_path, asset.local_path)
+        rewritten = markdown_link_target(relative_path(page_index_path, asset.local_path))
         return LinkRecord(
             href,
             _asset_key(href),
@@ -125,7 +125,7 @@ def _rewrite_href(
     target_page_id = page_id_from_url(href)
     if target_page_id and target_page_id in pages_by_id:
         anchor = urlsplit(href).fragment
-        rewritten = relative_path(page_index_path, page_paths[target_page_id])
+        rewritten = markdown_link_target(relative_path(page_index_path, page_paths[target_page_id]))
         if anchor:
             rewritten += f"#{markdown_anchor(anchor)}"
         return LinkRecord(

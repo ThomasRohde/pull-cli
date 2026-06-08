@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 AssetPolicy = Literal["visible", "page", "all"]
+AuthMode = Literal["auto", "bearer", "basic"]
 OutputMode = Literal["simple", "full"]
 RenderMode = Literal["hybrid", "view", "export-view", "styled-view", "storage"]
 MacroPolicy = Literal["expand", "placeholder", "strict"]
@@ -61,6 +62,7 @@ class Config:
     base_url: str | None = None
     user: str | None = None
     token: str | None = None
+    auth_mode: AuthMode = "auto"
     cloud_id: str | None = None
     ssl_verify: bool | str = True
     deployment: Literal["auto", "cloud", "data_center"] = "auto"

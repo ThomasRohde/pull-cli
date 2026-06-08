@@ -7,7 +7,7 @@ import requests
 from atlassian import Confluence
 from atlassian.errors import ApiError, ApiPermissionError
 
-from pull_cli.errors import EXIT_AUTH, EXIT_IO, EXIT_SOURCE, PullError
+from pull_cli.errors import EXIT_AUTH, EXIT_IO, EXIT_SOURCE, EXIT_VALIDATION, PullError
 from pull_cli.models import AttachmentRecord, CommentRecord, Config, PageRecord, PageSummary
 from pull_cli.security import redact_value, sanitize_url
 
@@ -20,7 +20,7 @@ class DataCenterClient:
             raise PullError(
                 code="ERR_VALIDATION_REQUIRED",
                 message="A Confluence base URL is required.",
-                exit_code=10,
+                exit_code=EXIT_VALIDATION,
                 suggested_action="Set --base-url, PULL_URL, or CONFPUB_URL.",
             )
         self.base_url = config.base_url.rstrip("/")
@@ -39,11 +39,7 @@ class DataCenterClient:
             "backoff_factor": 0.25,
             "backoff_jitter": 0,
         }
-        if config.token and config.user:
-            kwargs["username"] = config.user
-            kwargs["password"] = config.token
-        elif config.token:
-            kwargs["token"] = config.token
+        kwargs.update(_auth_kwargs(config))
         return Confluence(**kwargs)
 
     def close(self) -> None:
@@ -79,7 +75,10 @@ class DataCenterClient:
                     code="ERR_AUTH_FORBIDDEN" if status == 403 else "ERR_AUTH_REQUIRED",
                     message="Confluence authentication failed or the page is not visible.",
                     exit_code=EXIT_AUTH,
-                    suggested_action="Check credentials and page permissions.",
+                    suggested_action=(
+                        "Check credentials and page permissions. For Confluence Data Center PATs, "
+                        "retry with --auth bearer or pass --token without --user."
+                    ),
                     details=_error_details(exc),
                 ) from exc
             if status == 404:
@@ -315,6 +314,32 @@ def _body_value(body: dict[str, object], name: str) -> str | None:
     if isinstance(value, dict) and isinstance(value.get("value"), str):
         return value["value"]
     return None
+
+
+def _auth_kwargs(config: Config) -> dict[str, str]:
+    if config.auth_mode == "basic":
+        if not config.user or not config.token:
+            raise PullError(
+                code="ERR_VALIDATION_REQUIRED",
+                message="Basic authentication requires both a user and token.",
+                exit_code=EXIT_VALIDATION,
+                suggested_action="Pass --user and --token, or use --auth bearer for PAT-only authentication.",
+            )
+        return {"username": config.user, "password": config.token}
+    if config.auth_mode == "bearer":
+        if not config.token:
+            raise PullError(
+                code="ERR_VALIDATION_REQUIRED",
+                message="Bearer authentication requires a token.",
+                exit_code=EXIT_VALIDATION,
+                suggested_action="Pass --token, PULL_TOKEN, or CONFPUB_TOKEN.",
+            )
+        return {"token": config.token}
+    if config.token and config.user:
+        return {"username": config.user, "password": config.token}
+    if config.token:
+        return {"token": config.token}
+    return {}
 
 
 def _person_display_name(value: object) -> str | None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -13,6 +14,9 @@ SECRET_TEXT_PATTERNS = [
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
     re.compile(r"\bBasic\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
     re.compile(r"(?i)(access_token|api_token|jwt|token|signature|atl_token)=([^&\s]+)"),
+    re.compile(
+        r"(?i)\b(authorization|cookie|password|secret|jwt|token|signature|atl_token|access[_-]?key|api[_-]?token|access[_-]?token)\s*[:=]\s*([^\s,;]+)"
+    ),
     re.compile(r"(?i)\bname=[\"']?(atl_token|token|signature|jwt|password|secret)[\"']?"),
 ]
 SOURCE_URL_TEXT_PATTERN = re.compile(r"https?://[^\s<>'\")]+", re.IGNORECASE)
@@ -39,6 +43,12 @@ SENSITIVE_QUERY_KEYS = {
     "x-amz-signature",
     "x-amz-signedheaders",
 }
+
+
+@dataclass(frozen=True)
+class SecretFinding:
+    line: int
+    term: str
 
 
 def redact_text(value: str) -> str:
@@ -94,10 +104,31 @@ def redact_value(value: Any, *, redact_source_urls: bool = False) -> Any:
 
 
 def contains_secret_text(value: str) -> bool:
-    if SECRET_KEY_PATTERN.search(value):
-        return True
-    for pattern in SECRET_TEXT_PATTERNS:
-        for match in pattern.finditer(value):
-            if "<redacted>" not in match.group(0) and "<redacted-auth>" not in match.group(0):
-                return True
-    return False
+    return bool(secret_findings(value))
+
+
+def secret_findings(value: str) -> list[SecretFinding]:
+    findings: list[SecretFinding] = []
+    for line_number, line in enumerate(value.splitlines(), start=1):
+        for pattern in SECRET_TEXT_PATTERNS:
+            for match in pattern.finditer(line):
+                if "<redacted>" in match.group(0) or "<redacted-auth>" in match.group(0):
+                    continue
+                findings.append(SecretFinding(line=line_number, term=_safe_secret_term(match.group(0))))
+    return findings
+
+
+def _safe_secret_term(value: str) -> str:
+    stripped = value.strip()
+    lowered = stripped.lower()
+    if lowered.startswith("bearer "):
+        return "Bearer"
+    if lowered.startswith("basic "):
+        return "Basic"
+    if "=" in stripped:
+        key, value = stripped.split("=", 1)
+        if key.strip().lower() == "name":
+            name_value = value.strip().strip("\"'")
+            return f"name={name_value}"
+        return key.strip()
+    return stripped[:40]

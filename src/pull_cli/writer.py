@@ -22,7 +22,7 @@ from .models import (
     PullOptions,
     WarningRecord,
 )
-from .paths import as_posix, relative_path, slugify
+from .paths import as_posix, markdown_link_target, relative_path, slugify
 from .security import (
     SECRET_KEY_PATTERN,
     redact_source_url_text,
@@ -360,7 +360,7 @@ def build_ai_entry_markdown(ai_manifest: dict[str, Any]) -> str:
     for label in core_file_labels:
         path = entrypoints.get(label) if isinstance(entrypoints, dict) else None
         if path:
-            core_file_lines.append(f"- {label}: [{path}]({path})")
+            core_file_lines.append(f"- {label}: [{path}]({markdown_link_target(path)})")
     if core_file_lines:
         lines.extend(["", "## Core Files", "", *core_file_lines])
     lines.extend(["", "## Page Hierarchy", ""])
@@ -376,10 +376,12 @@ def build_ai_entry_markdown(ai_manifest: dict[str, Any]) -> str:
             sidecars = asset.get("sidecars") or []
             sidecar_text = ""
             if sidecars:
-                sidecar_links = ", ".join(f"[{sidecar}]({sidecar})" for sidecar in sidecars)
+                sidecar_links = ", ".join(
+                    f"[{sidecar}]({markdown_link_target(sidecar)})" for sidecar in sidecars
+                )
                 sidecar_text = f"; sidecars: {sidecar_links}"
             lines.append(
-                f"- `{page_name}/{asset['name']}`: [{asset['path']}]({asset['path']}){sidecar_text}"
+                f"- `{page_name}/{asset['name']}`: [{asset['path']}]({markdown_link_target(asset['path'])}){sidecar_text}"
             )
     lines.extend(["", "## Diagnostics", "", f"- warnings: {ai_manifest.get('diagnostics', {}).get('warnings', 0)}"])
     if not simple_mode:
@@ -461,9 +463,12 @@ def _page_hierarchy_line(page: dict[str, Any]) -> str:
     markdown = page.get("markdown", "")
     comments = ""
     if isinstance(page.get("comments"), str):
-        comments = f", comments {page.get('comments_count', 0)} ([comments.md]({page['comments']}))"
+        comments = (
+            f", comments {page.get('comments_count', 0)} "
+            f"([comments.md]({markdown_link_target(page['comments'])}))"
+        )
     return (
-        f"`{page.get('name')}`: [{page.get('title')}]({markdown}) "
+        f"`{page.get('name')}`: [{page.get('title')}]({markdown_link_target(markdown)}) "
         f"- path `{markdown}`, depth {page.get('depth')}, assets {len(page.get('assets', []))}, warnings {page.get('warnings')}{comments}"
     )
 
@@ -547,7 +552,7 @@ def page_markdown_header(artifact: PageArtifact, *, options: PullOptions) -> str
         comments_link = relative_path(artifact.index_md, artifact.comments_path)
         lines.extend(
             [
-                f"> Comments sidecar: [{len(artifact.comments)} comment(s)]({comments_link}).",
+                f"> Comments sidecar: [{len(artifact.comments)} comment(s)]({markdown_link_target(comments_link)}).",
                 "",
             ]
         )
@@ -665,7 +670,7 @@ def _comment_locations(comments: list[CommentRecord], *, options: PullOptions) -
 def _markdown_link_line(label: str, path: object) -> str:
     if not isinstance(path, str) or not path:
         return f"- {label}: unavailable"
-    return f"- {label}: [{path}]({path})"
+    return f"- {label}: [{path}]({markdown_link_target(path)})"
 
 
 def _artifact_guidance(result: ExtractionResult, *, options: PullOptions) -> dict[str, Any]:

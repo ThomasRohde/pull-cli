@@ -29,6 +29,13 @@ def guide_payload() -> dict[str, object]:
                     "assets": ["--assets visible|page|all", "--no-assets", "--extract-attachments", "--diagram-sources"],
                     "comments": ["--comments"],
                     "links": ["--rewrite-links/--no-rewrite-links", "--follow-includes", "--follow-links same-tree|same-space|none"],
+                    "auth": [
+                        "--auth auto|bearer|basic",
+                        "--base-url URL",
+                        "--user USER",
+                        "--token TOKEN",
+                        "--ssl-verify true|false|CA_BUNDLE",
+                    ],
                     "agent": ["--json", "LLM=true"],
                 },
             },
@@ -62,6 +69,17 @@ def guide_payload() -> dict[str, object]:
             "manifest_paths": "Manifest and AI manifest paths are package-root-relative. Resolve them against the directory containing the root AI Markdown/YAML file, not the shell current working directory.",
             "bundle_links": "Local links in bundle.md are rebased to package-root-relative paths.",
             "comments": "--comments is opt-in. It fetches page and inline comments, writes page-local comments.md sidecars only when comments exist, and links them from agent-facing navigation.",
+        },
+        "auth": {
+            "mode_default": "auto",
+            "modes": {
+                "auto": "Uses Basic auth when a user and token are both resolved; uses Bearer/PAT token auth when only a token is resolved. Explicit --token without explicit --user does not pick up PULL_USER or CONFPUB_USER.",
+                "bearer": "Forces token-only Bearer/PAT auth and ignores user fallbacks.",
+                "basic": "Forces username+token Basic auth and requires a resolved user and token.",
+            },
+            "data_center_pat": "For Confluence Data Center PATs that work with Authorization: Bearer <PAT>, use --auth bearer or pass --token without --user.",
+            "compat_env": "CONFPUB_USER remains a compatibility fallback for Basic auth, but it does not override an explicit token-only CLI invocation.",
+            "ssl_verify_false": "--ssl-verify false intentionally disables certificate verification and suppresses urllib3 InsecureRequestWarning output.",
         },
         "json_envelope": {
             "schema_version": "1.0",
@@ -108,6 +126,7 @@ def guide_payload() -> dict[str, object]:
             "pull --page-id 123456 --output-mode full -o pulled-full",
             "pull \"https://example.atlassian.net/wiki/spaces/EA/pages/123456/Architecture\" -o pulled",
             "pull \"https://example.atlassian.net/wiki/spaces/EA/pages/123456/Architecture\" --tree --comments --clean -o pulled-confluence",
+            "pull \"https://confluence.example.com/spaces/EA/pages/123456/Architecture\" --auth bearer --token $token --ssl-verify false -o data-center-pat",
             "pull --page-id 123456 --tree --depth 2 --assets all -o pulled-tree",
             "pull --page-id 123456 --tree --comments -o pulled-comments",
             "pull validate pulled-tree",
@@ -116,6 +135,19 @@ def guide_payload() -> dict[str, object]:
         "compatibility_notes": [
             "PULL_* environment variables take precedence over config file values.",
             "CONFPUB_URL, CONFPUB_USER, CONFPUB_TOKEN, and CONFPUB_SSL_VERIFY are accepted as compatibility fallbacks.",
+            "Use --auth bearer for Data Center PATs when Basic auth with CONFPUB_USER:CONFPUB_TOKEN returns 401.",
             "The CLI is read-only and does not call LLM services.",
         ],
+        "troubleshooting": {
+            "ERR_AUTH_REQUIRED": [
+                "Confirm the page is visible to the token/user.",
+                "For Data Center PATs, test whether Authorization: Bearer <PAT> works and retry with --auth bearer.",
+                "If --token is intended as Bearer auth, omit --user; explicit --token without --user ignores PULL_USER and CONFPUB_USER.",
+                "If Basic auth is intended, pass --auth basic with --user and --token.",
+            ],
+            "ERR_VALIDATION_OUTPUT_EXISTS": [
+                "Use --clean for a fresh package, especially when switching output modes.",
+                "Use --force only when keeping stale files is acceptable.",
+            ],
+        },
     }
