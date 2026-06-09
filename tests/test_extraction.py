@@ -265,6 +265,27 @@ def test_full_mode_writes_current_evidence_artifacts_and_links_control_files(tmp
     assert validate_package(output).ok
 
 
+def test_render_mode_storage_prefers_storage_body(tmp_path: Path) -> None:
+    output = tmp_path / "storage-mode"
+    page = make_page(
+        "130",
+        "Storage Mode",
+        body_view="<h1>Rendered Body</h1><p>Rendered only.</p>",
+        storage="<h1>Storage Body</h1><p>Storage only.</p>",
+    )
+    client = FakeConfluenceClient(pages={"130": page})
+
+    result = extract(
+        client=client,
+        root=PageSummary(page_id="130", title="Storage Mode"),
+        options=PullOptions(output=output, force=True, render_mode="storage"),
+    )
+
+    markdown = read(output / result.pages[0].index_md)
+    assert "Storage only." in markdown
+    assert "Rendered only." not in markdown
+
+
 def test_attachment_macro_ui_is_sanitized_and_replaced_with_read_only_listing(tmp_path: Path) -> None:
     output = tmp_path / "attachments"
     page = make_page(

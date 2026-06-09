@@ -323,6 +323,61 @@ def test_cli_auth_basic_can_use_legacy_user_env(capsys, monkeypatch, tmp_path: P
     assert config.auth_mode == "basic"
 
 
+def test_cli_page_id_after_json_and_other_flags_is_resolved(capsys, monkeypatch, tmp_path: Path) -> None:
+    page = make_page("908", "CLI Ordered", body_view="<h1>CLI Ordered</h1>")
+    client = FakeConfluenceClient(pages={"908": page})
+    monkeypatch.setattr(cli, "build_client", lambda _config: client)
+
+    assert (
+        main(
+            [
+                "--auth",
+                "basic",
+                "--no-assets",
+                "--json",
+                "--page-id",
+                "908",
+                "-o",
+                str(tmp_path / "cli-ordered"),
+                "--clean",
+            ]
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert captured.err == ""
+    assert payload["ok"] is True
+    assert payload["target"]["page_id"] == "908"
+
+
+def test_cli_verbose_progress_goes_to_stderr(capsys, monkeypatch, tmp_path: Path) -> None:
+    page = make_page("909", "CLI Verbose", body_view="<h1>CLI Verbose</h1>")
+    client = FakeConfluenceClient(pages={"909": page})
+    monkeypatch.setattr(cli, "build_client", lambda _config: client)
+
+    assert (
+        main(
+            [
+                "--page-id",
+                "909",
+                "--output",
+                str(tmp_path / "cli-verbose"),
+                "--clean",
+                "--verbose",
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    json.loads(captured.out)
+    assert "[pull:crawl]" in captured.err
+    assert "[pull:page]" in captured.err
+
+
 def test_ssl_verify_false_suppresses_urllib3_warning(monkeypatch) -> None:
     called = {}
 

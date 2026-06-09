@@ -11,6 +11,8 @@ from pull_cli.errors import EXIT_AUTH, EXIT_IO, EXIT_SOURCE, EXIT_VALIDATION, Pu
 from pull_cli.models import AttachmentRecord, CommentRecord, Config, PageRecord, PageSummary
 from pull_cli.security import redact_value, sanitize_url
 
+REQUEST_TIMEOUT_SECONDS = 30
+
 
 class DataCenterClient:
     deployment_type = "data_center"
@@ -25,13 +27,16 @@ class DataCenterClient:
             )
         self.base_url = config.base_url.rstrip("/")
         self.api_calls = 0
+        self._auth_mode = config.auth_mode
+        self._has_user = bool(config.user)
+        self._token_prefix = (config.token or "")[:4].upper()
         self._api = api or self._build_api(config)
 
     def _build_api(self, config: Config) -> Confluence:
         kwargs = {
             "url": self.base_url,
             "verify_ssl": config.ssl_verify,
-            "timeout": 30,
+            "timeout": REQUEST_TIMEOUT_SECONDS,
             "backoff_and_retry": True,
             "retry_status_codes": [429, 502, 503, 504],
             "max_backoff_retries": 3,
@@ -75,10 +80,7 @@ class DataCenterClient:
                     code="ERR_AUTH_FORBIDDEN" if status == 403 else "ERR_AUTH_REQUIRED",
                     message="Confluence authentication failed or the page is not visible.",
                     exit_code=EXIT_AUTH,
-                    suggested_action=(
-                        "Check credentials and page permissions. For Confluence Data Center PATs, "
-                        "retry with --auth bearer or pass --token without --user."
-                    ),
+                    suggested_action=self._auth_suggested_action(status),
                     details=_error_details(exc),
                 ) from exc
             if status == 404:
@@ -110,6 +112,24 @@ class DataCenterClient:
                 retryable=True,
                 details={"reason": str(exc)},
             ) from exc
+
+    def _auth_suggested_action(self, status: int | None) -> str:
+        if (
+            self.deployment_type == "cloud"
+            and status == 403
+            and self._token_prefix == "ATAT"
+            and (self._auth_mode == "bearer" or not self._has_user)
+        ):
+            return (
+                "This looks like an Atlassian Cloud API token. Cloud API tokens require "
+                "Basic auth with your account email: set --user and use --auth basic."
+            )
+        if self.deployment_type == "cloud":
+            return "Check Cloud credentials and page permissions. Cloud API tokens require --user with --auth basic."
+        return (
+            "Check credentials and page permissions. For Confluence Data Center PATs, "
+            "retry with --auth bearer or pass --token without --user."
+        )
 
     def _get_paged(
         self,

@@ -41,6 +41,7 @@ class PullOptions:
     redact_source_urls: bool = False
     redact_manifest: bool = False
     strict: bool = False
+    verbose: bool = False
 
     def __post_init__(self) -> None:
         full_mode = self.output_mode == "full"

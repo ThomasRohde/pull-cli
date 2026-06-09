@@ -7,7 +7,7 @@ from atlassian import Confluence
 from pull_cli.models import AttachmentRecord, Config, PageRecord, PageSummary
 from pull_cli.security import redact_value
 
-from .data_center import DataCenterClient, _auth_kwargs
+from .data_center import REQUEST_TIMEOUT_SECONDS, DataCenterClient, _auth_kwargs
 
 
 class CloudV2Client(DataCenterClient):
@@ -29,7 +29,7 @@ class CloudV2Client(DataCenterClient):
         kwargs = {
             "url": self.base_url,
             "verify_ssl": config.ssl_verify,
-            "timeout": 30,
+            "timeout": REQUEST_TIMEOUT_SECONDS,
             "cloud": True,
             "backoff_and_retry": True,
             "retry_status_codes": [429, 502, 503, 504],
@@ -54,17 +54,22 @@ class CloudV2Client(DataCenterClient):
         return data if isinstance(data, dict) else {}
 
     def get_page(self, page_id: str) -> PageRecord:
-        # Prefer the v1 helper for rich combined body expansion; annotate with v2 metadata.
-        page = super().get_page(page_id)
         data = self._cloud_v2_get("pages", page_id, params={"body-format": "storage"})
         if data:
-            page.raw["cloud_v2"] = redact_value(data)
-            if not page.body_storage:
-                body = data.get("body") if isinstance(data.get("body"), dict) else {}
-                storage = body.get("storage") if isinstance(body, dict) else {}
-                if isinstance(storage, dict) and isinstance(storage.get("value"), str):
-                    page.body_storage = storage["value"]
-        return page
+            return self._parse_cloud_page(data, page_id)
+        return super().get_page(page_id)
+
+    def _parse_cloud_page(self, data: dict[str, Any], page_id: str) -> PageRecord:
+        links = data.get("_links") if isinstance(data.get("_links"), dict) else {}
+        return PageRecord(
+            page_id=str(data.get("id") or page_id),
+            title=str(data.get("title") or "Untitled"),
+            space_key=_space_key(data),
+            url=self._absolute_url(str(links.get("webui") or "")) if links else None,
+            version=_version_number(data),
+            body_storage=_body_storage(data),
+            raw=redact_value(data),
+        )
 
     def get_children(self, page_id: str) -> list[PageSummary]:
         data = self._cloud_v2_get("pages", page_id, "children", params={"limit": 100})
@@ -126,3 +131,15 @@ class CloudV2Client(DataCenterClient):
 def _space_key(item: dict[str, Any]) -> str | None:
     space = item.get("space") if isinstance(item.get("space"), dict) else {}
     return str(space.get("key") or item.get("spaceKey") or "") or None
+
+
+def _body_storage(data: dict[str, Any]) -> str | None:
+    body = data.get("body") if isinstance(data.get("body"), dict) else {}
+    storage = body.get("storage") if isinstance(body.get("storage"), dict) else {}
+    value = storage.get("value")
+    return value if isinstance(value, str) else None
+
+
+def _version_number(data: dict[str, Any]) -> int | None:
+    version = data.get("version") if isinstance(data.get("version"), dict) else {}
+    return int(version["number"]) if isinstance(version.get("number"), int) else None

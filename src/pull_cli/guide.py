@@ -36,6 +36,7 @@ def guide_payload() -> dict[str, object]:
                         "--token TOKEN",
                         "--ssl-verify true|false|CA_BUNDLE",
                     ],
+                    "diagnostics": ["--verbose"],
                     "agent": ["--json", "LLM=true"],
                 },
             },
@@ -77,9 +78,14 @@ def guide_payload() -> dict[str, object]:
                 "bearer": "Forces token-only Bearer/PAT auth and ignores user fallbacks.",
                 "basic": "Forces username+token Basic auth and requires a resolved user and token.",
             },
+            "cloud_api_token": "Atlassian Cloud API tokens commonly start with ATAT and require Basic auth with an account email. pull fails fast if an ATAT token is used as Bearer auth against *.atlassian.net.",
             "data_center_pat": "For Confluence Data Center PATs that work with Authorization: Bearer <PAT>, use --auth bearer or pass --token without --user.",
             "compat_env": "CONFPUB_USER remains a compatibility fallback for Basic auth, but it does not override an explicit token-only CLI invocation.",
             "ssl_verify_false": "--ssl-verify false intentionally disables certificate verification and suppresses urllib3 InsecureRequestWarning output.",
+        },
+        "cloud": {
+            "page_body": "Cloud page pulls use the v2 page storage endpoint first and do not require the v1 rendered-body expansion when v2 storage is available.",
+            "render_modes": "--render-mode storage uses storage content for Markdown conversion; hybrid still prefers rendered HTML when a client returns it.",
         },
         "json_envelope": {
             "schema_version": "1.0",
@@ -121,6 +127,10 @@ def guide_payload() -> dict[str, object]:
             "W_DYNAMIC_MACRO_SNAPSHOT",
             "W_SANITIZED_HTML",
         ],
+        "diagnostics": {
+            "verbose": "--verbose writes phase progress and timings to stderr. JSON stdout remains a single parseable envelope.",
+            "timeouts": "Confluence HTTP calls use the atlassian-python-api request timeout and surface ERR_IO_TIMEOUT on requests timeouts.",
+        },
         "examples": [
             "pull 123456 -o pulled",
             "pull --page-id 123456 --output-mode full -o pulled-full",
@@ -142,6 +152,7 @@ def guide_payload() -> dict[str, object]:
             "ERR_AUTH_REQUIRED": [
                 "Confirm the page is visible to the token/user.",
                 "For Data Center PATs, test whether Authorization: Bearer <PAT> works and retry with --auth bearer.",
+                "For Atlassian Cloud ATAT API tokens, set --user to the account email and use --auth basic.",
                 "If --token is intended as Bearer auth, omit --user; explicit --token without --user ignores PULL_USER and CONFPUB_USER.",
                 "If Basic auth is intended, pass --auth basic with --user and --token.",
             ],

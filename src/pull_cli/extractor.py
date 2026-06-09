@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import time
 from pathlib import Path
 
 from .assets import discover_asset_candidates, download_assets, skipped_asset_warnings
@@ -36,6 +38,8 @@ def extract(
     root: PageSummary,
     options: PullOptions,
 ) -> ExtractionResult:
+    progress = _Progress(options.verbose)
+    progress.emit("crawl", f"start root={root.page_id} tree={options.tree} depth={options.depth}")
     summaries = crawl_pages(
         client,
         root,
@@ -43,7 +47,9 @@ def extract(
         depth=options.depth,
         max_pages=options.max_pages,
     )
+    progress.emit("crawl", f"done pages={len(summaries)}")
     prepare_output_dir(options.output, force=options.force, clean=options.clean)
+    progress.emit("output", f"prepared {options.output}")
     page_paths = _page_paths(summaries, options=options)
     pages_by_id = {summary.page_id: summary for summary in summaries}
     registry = MacroRegistry()
@@ -58,7 +64,9 @@ def extract(
         macros=[],
     )
     for summary in summaries:
+        progress.emit("page", f"fetch start id={summary.page_id} order={summary.order}")
         page = client.get_page(summary.page_id)
+        progress.emit("page", f"fetch done id={summary.page_id}")
         page.order = summary.order
         page.depth = summary.depth
         page.parent_id = summary.parent_id
@@ -69,20 +77,32 @@ def extract(
         index_html = f"{page_dir}/index.html" if options.write_html else None
         source_path = f"{page_dir}/source.storage.xml" if options.write_source and page.body_storage else None
         page_json = f"{page_dir}/page.json"
+        progress.emit("comments", f"fetch start page={page.page_id} enabled={options.comments}")
         comments, comment_warnings = _collect_comments(client, page.page_id, options=options)
+        progress.emit("comments", f"fetch done page={page.page_id} count={len(comments)}")
         comments_path = f"{page_dir}/comments.md" if comments else None
-        rendered = _select_rendered_body(page.body_view, page.body_export_view, page.body_storage)
+        rendered = _select_rendered_body(
+            page.body_view,
+            page.body_export_view,
+            page.body_storage,
+            render_mode=options.render_mode,
+        )
+        progress.emit("html", f"normalize start page={page.page_id} mode={options.render_mode}")
         normalized_html, html_warnings = normalize_html(
             rendered,
             source_page_id=page.page_id,
         )
+        progress.emit("html", f"normalize done page={page.page_id}")
+        progress.emit("attachments", f"list start page={page.page_id}")
         attachments = client.list_attachments(page.page_id)
+        progress.emit("attachments", f"list done page={page.page_id} count={len(attachments)}")
         candidates = discover_asset_candidates(
             normalized_html,
             page_id=page.page_id,
             attachments=attachments,
             options=options,
         )
+        progress.emit("assets", f"download start page={page.page_id} candidates={len(candidates)}")
         assets, asset_warnings = download_assets(
             candidates,
             page_id=page.page_id,
@@ -91,8 +111,10 @@ def extract(
             client=client,
             extract_attachments=options.extract_attachments,
         )
+        progress.emit("assets", f"download done page={page.page_id} assets={len(assets)}")
         if options.no_assets:
             asset_warnings.extend(skipped_asset_warnings(normalized_html, page_id=page.page_id))
+        progress.emit("links", f"rewrite start page={page.page_id}")
         rewritten_html, links, link_warnings = rewrite_html_links(
             normalized_html,
             page=page,
@@ -102,6 +124,7 @@ def extract(
             assets=assets,
             rewrite_links=options.rewrite_links,
         )
+        progress.emit("links", f"rewrite done page={page.page_id} links={len(links)}")
         if options.redact_manifest or options.redact_source_urls:
             _redact_links(links, redact_source_urls=options.redact_source_urls)
         if options.redact_source_urls:
@@ -116,9 +139,11 @@ def extract(
             options=options,
             child_links=_child_links(page, summaries, page_paths),
         )
+        progress.emit("macros", f"convert start page={page.page_id}")
         macros = registry.convert_all(page.body_storage, macro_context)
         _enforce_strict_macros(macros, options=options)
         macro_warnings = [warning for macro in macros for warning in macro.warnings]
+        progress.emit("macros", f"convert done page={page.page_id} macros={len(macros)}")
         visible_markdown = rendered_html_to_markdown(rewritten_html)
         attachment_markdown = _attachment_markdown(assets, page_index_path=index_md)
         if attachment_markdown:
@@ -146,7 +171,9 @@ def extract(
             + visible_markdown
             + ("\n\n## Macro Recovery\n\n" + macro_markdown + "\n" if macro_markdown else "")
         )
+        progress.emit("write", f"page start id={page.page_id} path={index_md}")
         write_page_artifact(options.output, artifact, options=options)
+        progress.emit("write", f"page done id={page.page_id}")
         result.pages.append(artifact)
         result.assets.extend(assets)
         result.links.extend(links)
@@ -169,14 +196,41 @@ def extract(
         base_url=client.base_url,
         deployment_type=client.deployment_type,
     )
+    progress.emit("package", f"done pages={len(result.pages)} assets={len(result.assets)} warnings={len(result.warnings)}")
     result.metrics["api_calls"] = client.api_calls
     result.metrics["pages"] = len(result.pages)
     result.metrics["assets"] = len(result.assets)
     return result
 
 
-def _select_rendered_body(view: str | None, export_view: str | None, storage: str | None) -> str:
+def _select_rendered_body(
+    view: str | None,
+    export_view: str | None,
+    storage: str | None,
+    *,
+    render_mode: str,
+) -> str:
+    if render_mode == "storage":
+        return storage or view or export_view or ""
+    if render_mode == "view":
+        return view or export_view or storage or ""
+    if render_mode in {"export-view", "styled-view"}:
+        return export_view or view or storage or ""
     return view or export_view or storage or ""
+
+
+class _Progress:
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled
+        self._last = time.perf_counter()
+
+    def emit(self, phase: str, message: str) -> None:
+        if not self.enabled:
+            return
+        now = time.perf_counter()
+        elapsed_ms = int((now - self._last) * 1000)
+        self._last = now
+        print(f"[pull:{phase}] +{elapsed_ms}ms {message}", file=sys.stderr, flush=True)
 
 
 def _macro_recovery_markdown(macros) -> str:

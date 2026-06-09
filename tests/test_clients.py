@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import pytest
+import requests
 
+from pull_cli.clients import build_client
 from pull_cli.clients.cloud_v2 import CloudV2Client
 from pull_cli.clients.data_center import DataCenterClient
 from pull_cli.errors import PullError
@@ -99,6 +101,78 @@ def test_cloud_download_attachment_uses_atlassian_api_wiki_rest_endpoint() -> No
             {"headers": {"Accept": "*/*"}, "not_json_response": True, "absolute": True},
         )
     ]
+
+
+def test_cloud_get_page_uses_v2_storage_without_v1_rendered_expand() -> None:
+    class CloudPageApi(FakeAtlassianConfluence):
+        def get(self, path: str, **kwargs):
+            self.calls.append(("get", path, kwargs))
+            if path == "https://example.atlassian.net/wiki/api/v2/pages/abc":
+                return {
+                    "id": "abc",
+                    "title": "Cloud Page",
+                    "space": {"key": "STEA"},
+                    "version": {"number": 7},
+                    "body": {"storage": {"value": "<p>Cloud storage body.</p>"}},
+                    "_links": {"webui": "/wiki/spaces/STEA/pages/abc/Cloud+Page"},
+                }
+            return {"results": []}
+
+        def get_page_by_id(self, page_id: str, expand: str):  # noqa: ARG002
+            raise AssertionError("Cloud v2 page fetch should not call v1 get_page_by_id")
+
+    api = CloudPageApi()
+    client = CloudV2Client(
+        Config(base_url="https://example.atlassian.net/wiki", user="u", token="t", auth_mode="basic"),
+        api=api,  # type: ignore[arg-type]
+    )
+
+    page = client.get_page("abc")
+
+    assert page.page_id == "abc"
+    assert page.title == "Cloud Page"
+    assert page.space_key == "STEA"
+    assert page.version == 7
+    assert page.body_storage == "<p>Cloud storage body.</p>"
+    assert api.calls == [
+        (
+            "get",
+            "https://example.atlassian.net/wiki/api/v2/pages/abc",
+            {"params": {"body-format": "storage"}, "absolute": True},
+        )
+    ]
+
+
+def test_cloud_atat_token_with_bearer_auth_fails_before_network() -> None:
+    with pytest.raises(PullError) as exc_info:
+        build_client(
+            Config(
+                base_url="https://example.atlassian.net/wiki",
+                token="ATATabc123",
+                auth_mode="bearer",
+            )
+        )
+
+    assert exc_info.value.code == "ERR_AUTH_REQUIRED"
+    assert "Cloud API tokens require Basic auth" in exc_info.value.message
+    assert "--auth basic" in (exc_info.value.suggested_action or "")
+
+
+def test_cloud_403_for_atat_bearer_gets_basic_auth_hint() -> None:
+    client = CloudV2Client(
+        Config(base_url="https://example.atlassian.net/wiki", token="ATATabc123", auth_mode="bearer"),
+        api=FakeAtlassianConfluence(),  # type: ignore[arg-type]
+    )
+    response = requests.Response()
+    response.status_code = 403
+    exc = requests.HTTPError("Forbidden")
+    exc.response = response
+
+    with pytest.raises(PullError) as exc_info:
+        client._call(lambda: (_ for _ in ()).throw(exc))
+
+    assert exc_info.value.code == "ERR_AUTH_FORBIDDEN"
+    assert "Cloud API tokens require Basic auth" in (exc_info.value.suggested_action or "")
 
 
 def test_data_center_client_fetches_paginated_footer_and_inline_comments() -> None:

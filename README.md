@@ -24,7 +24,7 @@ Cloud:
 set PULL_URL=https://example.atlassian.net/wiki
 set PULL_USER=you@example.com
 set PULL_TOKEN=your-api-token
-pull 123456 -o pulled-confluence
+pull 123456 --auth basic -o pulled-confluence
 ```
 
 Data Center or Server:
@@ -123,6 +123,8 @@ Resolution order:
 
 Use `--auth bearer` to force PAT/Bearer token auth and ignore user fallbacks. Use `--auth basic` when your instance expects username/password or username/API-token Basic auth; it requires a resolved user and token.
 
+Atlassian Cloud API tokens usually start with `ATAT` and require Basic auth with your account email. `pull` fails fast when an `ATAT` token is used as Bearer auth against `*.atlassian.net`.
+
 If a Data Center pull returns `ERR_AUTH_REQUIRED` while a direct request with `Authorization: Bearer <PAT>` succeeds, retry with `--auth bearer` or pass only `--token` and no explicit `--user`. If Basic auth is intended, pass `--auth basic --user <name> --token <token>`.
 
 When `--ssl-verify false` is used intentionally, `pull` suppresses urllib3 `InsecureRequestWarning` so JSON mode remains parseable on stdout.
@@ -134,6 +136,8 @@ The extractor uses a macro adapter registry. Current adapters cover panels/admon
 Asset policy defaults to `visible`: rendered images, visible attachment links, file macros, and rendered diagram images where discoverable. `--assets page` downloads all page attachments. `--assets all` includes visible/referenced assets plus all page attachments and macro-listed files where discoverable. `--no-assets` skips downloads and preserves source links with warnings.
 
 Local links to pages in the pulled tree are rewritten to relative `index.md` paths. Downloaded asset links are rewritten to local files. External, mailto, Jira, and out-of-scope Confluence links are preserved. Same-page anchors are normalized where possible; unresolved anchors become diagnostics.
+
+On Atlassian Cloud, page body fetches use the Cloud v2 storage endpoint first to avoid slow or hanging rendered-body expansions. `--render-mode storage` uses storage content for Markdown conversion; `hybrid` still prefers rendered HTML when a client returns it.
 
 ## Comments
 
@@ -160,6 +164,8 @@ With `--json` or `LLM=true`, stdout is exactly one JSON object with:
 ```
 
 Progress, retries, warnings, and debug output belong on stderr.
+
+Use `--verbose` to emit phase progress and timings to stderr while preserving JSON stdout.
 
 ## Security
 

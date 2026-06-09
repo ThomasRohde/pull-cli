@@ -130,6 +130,7 @@ def _main_pull(argv: Sequence[str]) -> int:
         redact_source_urls=ns.redact_source_urls,
         redact_manifest=ns.redact_manifest,
         strict=ns.strict,
+        verbose=ns.verbose,
     )
     client = build_client(config)
     try:
@@ -358,7 +359,7 @@ def _pull_parser(*, json_mode: bool = False) -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="Emit a structured JSON object on stdout.")
     parser.add_argument("--version", action="version", version=f"pull-cli {__version__}")
     parser.add_argument("--quiet", action="store_true", help="Accepted but currently no-op; reserved for progress suppression.")
-    parser.add_argument("--verbose", action="store_true", help="Accepted but currently no-op; reserved for extra diagnostics.")
+    parser.add_argument("--verbose", action="store_true", help="Emit phase progress and timings to stderr.")
     parser.add_argument("--redact-source-urls", action="store_true")
     parser.add_argument("--redact-manifest", action="store_true")
     parser.add_argument("--strict", action="store_true", help="Treat strict extraction failures as errors.")
