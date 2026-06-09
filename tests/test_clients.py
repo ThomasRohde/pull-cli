@@ -175,6 +175,27 @@ def test_cloud_403_for_atat_bearer_gets_basic_auth_hint() -> None:
     assert "Cloud API tokens require Basic auth" in (exc_info.value.suggested_action or "")
 
 
+def test_ssl_error_fails_fast_with_corporate_ca_hint() -> None:
+    client = DataCenterClient(
+        Config(base_url="https://confluence.example.com/confluence"),
+        api=FakeAtlassianConfluence(),  # type: ignore[arg-type]
+    )
+    ssl_error = requests.exceptions.SSLError(
+        "certificate verify failed: unable to get local issuer certificate"
+    )
+
+    with pytest.raises(PullError) as exc_info:
+        client._call(lambda: (_ for _ in ()).throw(ssl_error))
+
+    assert exc_info.value.code == "ERR_TLS_VERIFY"
+    assert exc_info.value.retryable is False
+    assert "TLS verification failed" in exc_info.value.message
+    assert "--ssl-verify <path-to-corporate-ca-bundle>" in (
+        exc_info.value.suggested_action or ""
+    )
+    assert "certificate verify failed" in exc_info.value.details["reason"]
+
+
 def test_data_center_client_fetches_paginated_footer_and_inline_comments() -> None:
     api = FakeAtlassianConfluence()
     client = DataCenterClient(Config(base_url="https://confluence.example.com/confluence"), api=api)  # type: ignore[arg-type]

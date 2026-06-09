@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from importlib.metadata import version
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import urllib3
@@ -24,6 +26,8 @@ def test_guide_json_is_plain_json(capsys) -> None:
     assert "--output-mode simple|full" in payload["commands"]["pull"]["options"]["output"]
     assert "--auth auto|bearer|basic" in payload["commands"]["pull"]["options"]["auth"]
     assert payload["auth"]["mode_default"] == "auto"
+    assert "ssl_verify_ca_bundle" in payload["auth"]
+    assert "ERR_TLS_VERIFY" in payload["error_codes"]
 
 
 def test_pull_json_failure_envelope_without_target(capsys, monkeypatch) -> None:
@@ -389,3 +393,33 @@ def test_ssl_verify_false_suppresses_urllib3_warning(monkeypatch) -> None:
     cli._suppress_insecure_request_warnings(False)
 
     assert called["category"] is urllib3.exceptions.InsecureRequestWarning
+
+
+def test_default_ssl_verify_enables_system_truststore(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "_TRUSTSTORE_INJECTED", False)
+    monkeypatch.setitem(
+        sys.modules,
+        "truststore",
+        SimpleNamespace(inject_into_ssl=lambda: calls.append("inject")),
+    )
+
+    cli._enable_system_trust_store(True)
+    cli._enable_system_trust_store(True)
+
+    assert calls == ["inject"]
+
+
+def test_custom_ssl_verify_does_not_enable_system_truststore(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "_TRUSTSTORE_INJECTED", False)
+    monkeypatch.setitem(
+        sys.modules,
+        "truststore",
+        SimpleNamespace(inject_into_ssl=lambda: calls.append("inject")),
+    )
+
+    cli._enable_system_trust_store(False)
+    cli._enable_system_trust_store("C:/corp-ca-bundle.pem")
+
+    assert calls == []

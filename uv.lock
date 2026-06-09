@@ -909,6 +909,7 @@ dependencies = [
     { name = "lxml" },
     { name = "markdownify" },
     { name = "pyyaml" },
+    { name = "truststore" },
 ]
 
 [package.optional-dependencies]
@@ -940,6 +941,7 @@ requires-dist = [
     { name = "python-pptx", marker = "extra == 'extract'", specifier = ">=1.0.2" },
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.9" },
+    { name = "truststore", specifier = ">=0.10.4" },
 ]
 provides-extras = ["dev", "extract"]
 

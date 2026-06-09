@@ -9,7 +9,7 @@ from atlassian.errors import ApiError, ApiPermissionError
 
 from pull_cli.errors import EXIT_AUTH, EXIT_IO, EXIT_SOURCE, EXIT_VALIDATION, PullError
 from pull_cli.models import AttachmentRecord, CommentRecord, Config, PageRecord, PageSummary
-from pull_cli.security import redact_value, sanitize_url
+from pull_cli.security import redact_text, redact_value, sanitize_url
 
 REQUEST_TIMEOUT_SECONDS = 30
 
@@ -65,6 +65,19 @@ class DataCenterClient:
         self.api_calls += 1
         try:
             return operation(*args, **kwargs)
+        except requests.exceptions.SSLError as exc:
+            raise PullError(
+                code="ERR_TLS_VERIFY",
+                message="TLS verification failed while contacting Confluence.",
+                exit_code=EXIT_IO,
+                retryable=False,
+                suggested_action=(
+                    "If your network inspects TLS, pass --ssl-verify "
+                    "<path-to-corporate-ca-bundle>. On Windows, the corporate root CA "
+                    "is often in the system store but not in certifi."
+                ),
+                details={"reason": _exception_reason(exc)},
+            ) from exc
         except requests.Timeout as exc:
             raise PullError(
                 code="ERR_IO_TIMEOUT",
@@ -110,7 +123,7 @@ class DataCenterClient:
                 message="Could not contact Confluence.",
                 exit_code=EXIT_IO,
                 retryable=True,
-                details={"reason": str(exc)},
+                details={"reason": _exception_reason(exc)},
             ) from exc
 
     def _auth_suggested_action(self, status: int | None) -> str:
@@ -390,9 +403,13 @@ def _status_code(exc: Exception) -> int | None:
     return None
 
 
+def _exception_reason(exc: Exception) -> str:
+    return redact_text(str(exc))
+
+
 def _error_details(exc: Exception) -> dict[str, object]:
     response = getattr(exc, "response", None) or getattr(getattr(exc, "reason", None), "response", None)
-    details: dict[str, object] = {"reason": str(exc)}
+    details: dict[str, object] = {"reason": _exception_reason(exc)}
     if response is not None:
         details["status_code"] = getattr(response, "status_code", None)
         request = getattr(response, "request", None)

@@ -117,7 +117,7 @@ Resolution order:
 3. Optional YAML config from `--config`.
 4. `CONFPUB_*` compatibility environment variables.
 
-`--ssl-verify` accepts `true`, `false`, or a CA bundle path.
+`--ssl-verify` accepts `true`, `false`, or a CA bundle path. With the default `true`, `pull` attempts to use the operating system trust store through `truststore` before building the Confluence client. This helps enterprise environments where a corporate root CA is trusted by Windows, macOS, or Linux but is absent from `certifi`.
 
 `--auth` accepts `auto`, `bearer`, or `basic`. The default `auto` mode preserves username+token Basic auth when a user and token are both resolved. If you pass `--token` without an explicit `--user`, `pull` treats that as token-only auth and does not pair the token with `PULL_USER` or `CONFPUB_USER` from the environment. This makes Data Center PATs work with `Authorization: Bearer <PAT>` even on machines that still have `CONFPUB_USER` set for other tools.
 
@@ -126,6 +126,8 @@ Use `--auth bearer` to force PAT/Bearer token auth and ignore user fallbacks. Us
 Atlassian Cloud API tokens usually start with `ATAT` and require Basic auth with your account email. `pull` fails fast when an `ATAT` token is used as Bearer auth against `*.atlassian.net`.
 
 If a Data Center pull returns `ERR_AUTH_REQUIRED` while a direct request with `Authorization: Bearer <PAT>` succeeds, retry with `--auth bearer` or pass only `--token` and no explicit `--user`. If Basic auth is intended, pass `--auth basic --user <name> --token <token>`.
+
+TLS certificate failures fail fast with `ERR_TLS_VERIFY`. If your network inspects TLS and Python does not trust the corporate root CA, export that root to a PEM bundle and pass `--ssl-verify <path-to-corporate-ca-bundle>`. On Windows, the corporate root CA is often in the system store but not in `certifi`.
 
 When `--ssl-verify false` is used intentionally, `pull` suppresses urllib3 `InsecureRequestWarning` so JSON mode remains parseable on stdout.
 

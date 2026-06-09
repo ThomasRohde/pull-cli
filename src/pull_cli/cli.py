@@ -20,6 +20,7 @@ from .security import sanitize_url
 from .validator import validate_package
 
 DEFAULT_OUTPUT_DIRNAME = "pulled-confluence"
+_TRUSTSTORE_INJECTED = False
 
 
 class PullArgumentParser(argparse.ArgumentParser):
@@ -94,6 +95,7 @@ def _main_pull(argv: Sequence[str]) -> int:
         ssl_verify=ns.ssl_verify,
         config_path=ns.config,
     )
+    _enable_system_trust_store(config.ssl_verify)
     _suppress_insecure_request_warnings(config.ssl_verify)
     selection = TargetSelection(
         positional=ns.page_ref,
@@ -263,6 +265,7 @@ def _main_guide(argv: Sequence[str]) -> int:
         print("Default output mode is simple: root AI Markdown, page Markdown, assets, and validation control files.")
         print("Default output directory is ./pulled-confluence under your current working directory.")
         print("For Data Center PATs, use --auth bearer or pass --token without --user.")
+        print("For corporate TLS inspection, use --ssl-verify <path-to-corporate-ca-bundle> if default trust fails.")
         print("Use --output-mode full for bundle.md, page HTML snapshots, and source.storage.xml; use --clean to remove stale files when switching modes.")
         print("Start analysis from <sanitized-root-page-title>.md in the output package.")
         print("Manifest and AI manifest paths are package-root-relative; page links are page-file-relative.")
@@ -288,7 +291,9 @@ def _pull_parser(*, json_mode: bool = False) -> argparse.ArgumentParser:
             "  Default output mode is simple; use --output-mode full for bundle/html/source artifacts.\n\n"
             "Auth:\n"
             "  Use --auth bearer for Confluence Data Center PATs; explicit --token without --user\n"
-            "  will not be paired with PULL_USER or CONFPUB_USER.\n\n"
+            "  will not be paired with PULL_USER or CONFPUB_USER.\n"
+            "  For corporate TLS inspection, pass --ssl-verify <path-to-corporate-ca-bundle>\n"
+            "  if default OS/Python trust does not include the root CA.\n\n"
             "Agent flow:\n"
             "  pull guide --json\n"
             "  pull ... --json\n"
@@ -384,3 +389,18 @@ def _suppress_insecure_request_warnings(ssl_verify: bool | str) -> None:
     except Exception:  # noqa: BLE001
         return
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+def _enable_system_trust_store(ssl_verify: bool | str) -> None:
+    global _TRUSTSTORE_INJECTED
+    if ssl_verify is not True or _TRUSTSTORE_INJECTED:
+        return
+    try:
+        import truststore
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        truststore.inject_into_ssl()
+    except Exception:  # noqa: BLE001
+        return
+    _TRUSTSTORE_INJECTED = True
