@@ -8,6 +8,9 @@ import yaml
 
 from .models import AuthMode, Config
 
+DEFAULT_RETRIES = 3
+MAX_RETRIES = 10
+
 
 def _coerce_ssl_verify(value: str | bool | None) -> bool | str:
     if value is None or value == "":
@@ -42,6 +45,16 @@ def _coerce_auth_mode(value: str | None) -> AuthMode:
     if lowered == "basic":
         return "basic"
     return "auto"
+
+
+def _coerce_retries(value: object) -> int:
+    if value is None or value == "":
+        return DEFAULT_RETRIES
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_RETRIES
+    return max(0, min(MAX_RETRIES, parsed))
 
 
 def resolve_config(
@@ -95,6 +108,7 @@ def resolve_config(
             or file_data.get("ssl_verify")
             or env_map.get("CONFPUB_SSL_VERIFY")
         ),
+        retries=_coerce_retries(env_map.get("PULL_RETRIES") or file_data.get("retries")),
         deployment=file_data.get("deployment", "auto"),
         config_path=path,
     )

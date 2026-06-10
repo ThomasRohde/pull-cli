@@ -12,7 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "Thomas Rohde", email = "rohde.thomas@gmail.com" }]
 keywords = ["confluence", "atlassian", "cli", "markdown", "ai"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 5 - Production/Stable",
   "Environment :: Console",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
@@ -21,6 +21,8 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Documentation",
+  "Topic :: Text Processing :: Markup :: Markdown",
 ]
 dependencies = [
   "atlassian-python-api>=4.0.7",
@@ -35,6 +37,7 @@ dependencies = [
 Homepage = "https://github.com/ThomasRohde/pull-cli"
 Repository = "https://github.com/ThomasRohde/pull-cli"
 Issues = "https://github.com/ThomasRohde/pull-cli/issues"
+Changelog = "https://github.com/ThomasRohde/pull-cli/blob/master/CHANGELOG.md"
 
 [project.optional-dependencies]
 extract = [
@@ -47,6 +50,7 @@ extract = [
 dev = [
   "hatch>=1.14.0",
   "pytest>=8.3.0",
+  "pytest-cov>=5.0",
   "ruff>=0.6.9",
 ]
 
@@ -71,3 +75,6 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.coverage.run]
+source = ["src/pull_cli"]

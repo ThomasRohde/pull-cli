@@ -25,6 +25,7 @@ def guide_payload() -> dict[str, object]:
                         "--html/--no-html",
                         "--source/--no-source",
                         "--bundle/--no-bundle",
+                        "--chunks (experimental)",
                     ],
                     "assets": ["--assets visible|page|all", "--no-assets", "--extract-attachments", "--diagram-sources"],
                     "comments": ["--comments"],
@@ -36,7 +37,7 @@ def guide_payload() -> dict[str, object]:
                         "--token TOKEN",
                         "--ssl-verify true|false|CA_BUNDLE",
                     ],
-                    "diagnostics": ["--verbose"],
+                    "diagnostics": ["--verbose", "--quiet"],
                     "agent": ["--json", "LLM=true"],
                 },
             },
@@ -94,6 +95,22 @@ def guide_payload() -> dict[str, object]:
             "shape": ["schema_version", "request_id", "ok", "command", "target", "result", "warnings", "errors", "metrics"],
             "failure_result": None,
         },
+        "stability": {
+            "schema_version": "1.0",
+            "covered_by_semver": [
+                "CLI commands, flags, defaults, and documented flag interactions.",
+                "Exit codes and documented error/warning codes.",
+                "JSON envelope top-level shape and schema_version.",
+                "Output package layout, manifest path rules, and relative path semantics.",
+                "Documented PULL_* and CONFPUB_* environment variables.",
+            ],
+            "experimental": [
+                "chunks.jsonl record shape and chunking strategy.",
+            ],
+            "not_public_api": [
+                "Python internals under pull_cli.",
+            ],
+        },
         "error_codes": [
             "ERR_VALIDATION_REQUIRED",
             "ERR_VALIDATION_AMBIGUOUS_PAGE",
@@ -132,7 +149,9 @@ def guide_payload() -> dict[str, object]:
         ],
         "diagnostics": {
             "verbose": "--verbose writes phase progress and timings to stderr. JSON stdout remains a single parseable envelope.",
+            "quiet": "--quiet suppresses verbose progress and the human-readable success summary. Errors still print to stderr; --json output is unaffected.",
             "timeouts": "Confluence HTTP calls use the atlassian-python-api request timeout and surface ERR_IO_TIMEOUT on requests timeouts.",
+            "retries": "pull-cli owns bounded retries for retryable connection, timeout, and 429/502/503/504 responses. Set PULL_RETRIES=0 to disable or 0-10 to tune retry count.",
             "tls": "TLS certificate failures surface as non-retryable ERR_TLS_VERIFY instead of being retried as transient connection failures.",
         },
         "examples": [

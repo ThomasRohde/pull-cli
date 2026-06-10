@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import random
+import time
 from collections.abc import Iterable
 from urllib.parse import quote, urlencode, urljoin
 
@@ -12,6 +14,12 @@ from pull_cli.models import AttachmentRecord, CommentRecord, Config, PageRecord,
 from pull_cli.security import redact_text, redact_value, sanitize_url
 
 REQUEST_TIMEOUT_SECONDS = 30
+RETRY_DEFAULT_ATTEMPTS = 3
+RETRY_BACKOFF_BASE_SECONDS = 0.5
+RETRY_BACKOFF_MAX_SECONDS = 8.0
+RETRY_AFTER_CAP_SECONDS = 15.0
+_sleep = time.sleep
+_jitter = random.uniform
 
 
 class DataCenterClient:
@@ -27,6 +35,8 @@ class DataCenterClient:
             )
         self.base_url = config.base_url.rstrip("/")
         self.api_calls = 0
+        self.retries = 0
+        self._max_retries = config.retries
         self._auth_mode = config.auth_mode
         self._has_user = bool(config.user)
         self._token_prefix = (config.token or "")[:4].upper()
@@ -37,12 +47,7 @@ class DataCenterClient:
             "url": self.base_url,
             "verify_ssl": config.ssl_verify,
             "timeout": REQUEST_TIMEOUT_SECONDS,
-            "backoff_and_retry": True,
-            "retry_status_codes": [429, 502, 503, 504],
-            "max_backoff_retries": 3,
-            "max_backoff_seconds": 8,
-            "backoff_factor": 0.25,
-            "backoff_jitter": 0,
+            "backoff_and_retry": False,
         }
         kwargs.update(_auth_kwargs(config))
         return Confluence(**kwargs)
@@ -62,6 +67,21 @@ class DataCenterClient:
         return urljoin(self.base_url + "/", value.lstrip("/"))
 
     def _call(self, operation, *args, **kwargs):
+        retries_attempted = 0
+        while True:
+            try:
+                return self._call_once(operation, *args, **kwargs)
+            except PullError as exc:
+                if not exc.retryable or retries_attempted >= self._max_retries:
+                    if exc.retryable:
+                        exc.details["retries_attempted"] = retries_attempted
+                    raise
+                delay = _retry_delay(exc, retries_attempted)
+                retries_attempted += 1
+                self.retries += 1
+                _sleep(delay)
+
+    def _call_once(self, operation, *args, **kwargs):
         self.api_calls += 1
         try:
             return operation(*args, **kwargs)
@@ -400,6 +420,26 @@ def _exception_reason(exc: Exception) -> str:
     return redact_text(str(exc))
 
 
+def _retry_delay(exc: PullError, attempt: int) -> float:
+    retry_after = _retry_after_seconds(exc.details.get("retry_after"))
+    if retry_after is not None:
+        return min(RETRY_AFTER_CAP_SECONDS, retry_after)
+    base_delay = min(RETRY_BACKOFF_MAX_SECONDS, RETRY_BACKOFF_BASE_SECONDS * (2**attempt))
+    return min(RETRY_BACKOFF_MAX_SECONDS, base_delay + _jitter(0, min(0.1, base_delay * 0.1)))
+
+
+def _retry_after_seconds(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(str(value).strip())
+    except ValueError:
+        return None
+    if parsed < 0:
+        return None
+    return parsed
+
+
 def _tls_verify_error(exc: Exception) -> PullError:
     return PullError(
         code="ERR_TLS_VERIFY",
@@ -432,10 +472,15 @@ def _is_tls_setup_error(exc: OSError) -> bool:
 
 
 def _error_details(exc: Exception) -> dict[str, object]:
-    response = getattr(exc, "response", None) or getattr(getattr(exc, "reason", None), "response", None)
+    response = getattr(exc, "response", None)
+    if response is None:
+        response = getattr(getattr(exc, "reason", None), "response", None)
     details: dict[str, object] = {"reason": _exception_reason(exc)}
     if response is not None:
         details["status_code"] = getattr(response, "status_code", None)
+        retry_after = getattr(response, "headers", {}).get("Retry-After")
+        if retry_after:
+            details["retry_after"] = retry_after
         request = getattr(response, "request", None)
         if request is not None:
             details["url"] = sanitize_url(str(getattr(request, "url", "")))

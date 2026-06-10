@@ -42,8 +42,11 @@ class PullOptions:
     redact_manifest: bool = False
     strict: bool = False
     verbose: bool = False
+    quiet: bool = False
 
     def __post_init__(self) -> None:
+        if self.quiet:
+            self.verbose = False
         full_mode = self.output_mode == "full"
         if self.write_bundle is None:
             self.write_bundle = full_mode
@@ -66,6 +69,7 @@ class Config:
     auth_mode: AuthMode = "auto"
     cloud_id: str | None = None
     ssl_verify: bool | str = True
+    retries: int = 3
     deployment: Literal["auto", "cloud", "data_center"] = "auto"
     config_path: Path | None = None
 

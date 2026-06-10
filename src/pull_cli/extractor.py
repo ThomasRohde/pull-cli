@@ -198,6 +198,7 @@ def extract(
     )
     progress.emit("package", f"done pages={len(result.pages)} assets={len(result.assets)} warnings={len(result.warnings)}")
     result.metrics["api_calls"] = client.api_calls
+    result.metrics["retries"] = getattr(client, "retries", 0)
     result.metrics["pages"] = len(result.pages)
     result.metrics["assets"] = len(result.assets)
     return result

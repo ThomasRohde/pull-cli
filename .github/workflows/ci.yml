@@ -11,12 +11,18 @@ permissions:
 
 jobs:
   test:
-    name: Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.12", "3.13"]
+        include:
+          - os: windows-latest
+            python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.13"
 
     steps:
       - name: Check out repository
@@ -38,7 +44,12 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      - name: Test with coverage
+        if: runner.os == 'Linux'
+        run: uv run pytest --cov=pull_cli --cov-report=term-missing --cov-fail-under=82
+
       - name: Test
+        if: runner.os != 'Linux'
         run: uv run pytest
 
       - name: Build

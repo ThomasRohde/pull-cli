@@ -28,6 +28,9 @@ def test_guide_json_is_plain_json(capsys) -> None:
     assert payload["auth"]["mode_default"] == "auto"
     assert "ssl_verify_ca_bundle" in payload["auth"]
     assert "ERR_TLS_VERIFY" in payload["error_codes"]
+    assert "stability" in payload
+    assert "chunks.jsonl record shape and chunking strategy." in payload["stability"]["experimental"]
+    assert "--quiet" in payload["commands"]["pull"]["options"]["diagnostics"]
 
 
 def test_pull_json_failure_envelope_without_target(capsys, monkeypatch) -> None:
@@ -380,6 +383,72 @@ def test_cli_verbose_progress_goes_to_stderr(capsys, monkeypatch, tmp_path: Path
     json.loads(captured.out)
     assert "[pull:crawl]" in captured.err
     assert "[pull:page]" in captured.err
+
+
+def test_cli_quiet_human_success_prints_nothing(capsys, monkeypatch, tmp_path: Path) -> None:
+    page = make_page("911", "CLI Quiet", body_view="<h1>CLI Quiet</h1>")
+    client = FakeConfluenceClient(pages={"911": page})
+    monkeypatch.setattr(cli, "build_client", lambda _config: client)
+
+    assert (
+        main(
+            [
+                "--page-id",
+                "911",
+                "--base-url",
+                "https://example.atlassian.net/wiki",
+                "--output",
+                str(tmp_path / "cli-quiet"),
+                "--clean",
+                "--quiet",
+            ]
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_cli_quiet_overrides_verbose_in_json_mode(capsys, monkeypatch, tmp_path: Path) -> None:
+    page = make_page("912", "CLI Quiet JSON", body_view="<h1>CLI Quiet JSON</h1>")
+    client = FakeConfluenceClient(pages={"912": page})
+    monkeypatch.setattr(cli, "build_client", lambda _config: client)
+
+    assert (
+        main(
+            [
+                "--page-id",
+                "912",
+                "--base-url",
+                "https://example.atlassian.net/wiki",
+                "--output",
+                str(tmp_path / "cli-quiet-json"),
+                "--clean",
+                "--quiet",
+                "--verbose",
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["ok"] is True
+    assert "[pull:" not in captured.err
+
+
+def test_cli_quiet_does_not_suppress_errors(capsys, monkeypatch) -> None:
+    monkeypatch.delenv("PULL_URL", raising=False)
+    monkeypatch.delenv("CONFPUB_URL", raising=False)
+
+    assert main(["--page-id", "913", "--quiet"]) == 10
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "ERR_VALIDATION_REQUIRED" in captured.err
 
 
 def test_ssl_verify_false_suppresses_urllib3_warning(monkeypatch) -> None:

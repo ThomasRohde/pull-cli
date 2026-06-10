@@ -134,6 +134,7 @@ def _main_pull(argv: Sequence[str]) -> int:
         redact_manifest=ns.redact_manifest,
         strict=ns.strict,
         verbose=ns.verbose,
+        quiet=ns.quiet,
     )
     client = build_client(config)
     try:
@@ -168,7 +169,7 @@ def _main_pull(argv: Sequence[str]) -> int:
     )
     if json_mode:
         emit_json(payload)
-    else:
+    elif not options.quiet:
         print(
             f"Pulled {len(result.pages)} page(s), {len(result.assets)} asset(s), "
             f"{len(result.warnings)} warning(s) into {result.output_dir}"
@@ -333,7 +334,11 @@ def _pull_parser(*, json_mode: bool = False) -> argparse.ArgumentParser:
     parser.add_argument("--bundle", dest="bundle", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--html", dest="html", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--source", dest="source", action=argparse.BooleanOptionalAction, default=None)
-    parser.add_argument("--chunks", action="store_true")
+    parser.add_argument(
+        "--chunks",
+        action="store_true",
+        help="Write chunks.jsonl (experimental: chunking strategy and record shape may change in minor releases).",
+    )
 
     parser.add_argument("--assets", choices=["visible", "page", "all"], default="visible")
     parser.add_argument("--no-assets", action="store_true")
@@ -364,7 +369,11 @@ def _pull_parser(*, json_mode: bool = False) -> argparse.ArgumentParser:
 
     parser.add_argument("--json", action="store_true", help="Emit a structured JSON object on stdout.")
     parser.add_argument("--version", action="version", version=f"pull-cli {__version__}")
-    parser.add_argument("--quiet", action="store_true", help="Accepted but currently no-op; reserved for progress suppression.")
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress progress and the human-readable summary. Overrides --verbose. Errors still print to stderr; --json output is unaffected.",
+    )
     parser.add_argument("--verbose", action="store_true", help="Emit phase progress and timings to stderr.")
     parser.add_argument("--redact-source-urls", action="store_true")
     parser.add_argument("--redact-manifest", action="store_true")

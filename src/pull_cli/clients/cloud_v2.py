@@ -31,12 +31,7 @@ class CloudV2Client(DataCenterClient):
             "verify_ssl": config.ssl_verify,
             "timeout": REQUEST_TIMEOUT_SECONDS,
             "cloud": True,
-            "backoff_and_retry": True,
-            "retry_status_codes": [429, 502, 503, 504],
-            "max_backoff_retries": 3,
-            "max_backoff_seconds": 8,
-            "backoff_factor": 0.25,
-            "backoff_jitter": 0,
+            "backoff_and_retry": False,
         }
         kwargs.update(_auth_kwargs(config))
         return Confluence(**kwargs)

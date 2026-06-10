@@ -16,6 +16,14 @@ pip install pull-cli
 
 The package name is `pull-cli`. The import package is `pull_cli`. Console scripts are `pull` and `pull-cli`.
 
+## Documentation
+
+- [Design document](pull_ai_confluence_design.md)
+- [Architecture](ARCHITECTURE.md)
+- [Changelog](CHANGELOG.md)
+- [Contributing](CONTRIBUTING.md)
+- [Releasing](RELEASING.md)
+
 ## Quickstart
 
 Cloud:
@@ -106,6 +114,8 @@ pulled-confluence/
 
 `bundle.md` concatenates pages in page/tree order with stable delimiters for AI use; local links embedded in the bundle are rebased to the package root. `index.html` and `source.storage.xml` are raw/reference artifacts, not the primary navigation surface.
 
+`chunks.jsonl`, when requested with `--chunks`, is experimental. Its chunking strategy and record shape may change in minor releases and are excluded from the stability policy.
+
 For tree pulls, nested page paths are the default. The manifest always carries stable numeric ordering.
 
 ## Auth and Config
@@ -130,6 +140,8 @@ If a Data Center pull returns `ERR_AUTH_REQUIRED` while a direct request with `A
 TLS certificate failures fail fast with `ERR_TLS_VERIFY`. If your network inspects TLS and Python does not trust the corporate root CA, export that root to a PEM bundle and pass `--ssl-verify <path-to-corporate-ca-bundle>`. Empty, unreadable, or non-certificate bundle files are rejected before network access. On Windows, the corporate root CA is often in the system store but not in `certifi`.
 
 When `--ssl-verify false` is used intentionally, `pull` suppresses urllib3 `InsecureRequestWarning` so JSON mode remains parseable on stdout.
+
+Retries are bounded and owned by pull-cli. Retryable connection errors, timeouts, and HTTP 429/502/503/504 responses are retried up to three times by default with capped exponential backoff; `Retry-After` is honored when present. Set `PULL_RETRIES=0` to disable retries or `PULL_RETRIES=<0-10>` to tune the count.
 
 ## Macro, Asset, and Link Behavior
 
@@ -167,7 +179,22 @@ With `--json` or `LLM=true`, stdout is exactly one JSON object with:
 
 Progress, retries, warnings, and debug output belong on stderr.
 
-Use `--verbose` to emit phase progress and timings to stderr while preserving JSON stdout.
+Use `--verbose` to emit phase progress and timings to stderr while preserving JSON stdout. Use `--quiet` to suppress verbose progress and the human-readable success summary; errors still print to stderr, and `--json` output is unaffected.
+
+## Stability Policy
+
+Covered by semantic versioning:
+
+- CLI commands, flags, defaults, and documented flag interactions.
+- Exit codes and documented error/warning codes.
+- JSON envelope top-level shape and `schema_version`.
+- Output package layout, manifest path rules, and relative path semantics.
+- Documented `PULL_*` and `CONFPUB_*` environment variables.
+
+Excluded from the stability policy:
+
+- `chunks.jsonl` record shape and chunking strategy.
+- Python internals under `pull_cli`; this package is not a public library API.
 
 ## Security
 
@@ -190,6 +217,7 @@ Validation checks manifest shape, AI navigation manifest paths, relative paths, 
 uv sync --all-extras
 uv run ruff check .
 uv run pytest
+uv run pytest --cov=pull_cli --cov-report=term-missing
 uv build
 uv run pull --help
 uv run pull guide --json

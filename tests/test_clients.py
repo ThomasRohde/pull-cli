@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 import requests
 
+import pull_cli.clients.data_center as data_center
 from pull_cli.clients import build_client
 from pull_cli.clients.cloud_v2 import CloudV2Client
 from pull_cli.clients.data_center import DataCenterClient
@@ -211,6 +212,107 @@ def test_tls_setup_os_error_fails_fast_with_tls_code() -> None:
     assert "TLS CA certificate bundle" in exc_info.value.details["reason"]
 
 
+def test_retry_connection_errors_then_success(monkeypatch) -> None:
+    sleeps: list[float] = []
+
+    class FlakyApi(FakeAtlassianConfluence):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failures_left = 2
+
+        def get_page_by_id(self, page_id: str, expand: str):
+            if self.failures_left:
+                self.failures_left -= 1
+                raise requests.ConnectionError("temporary connection failure")
+            return super().get_page_by_id(page_id, expand)
+
+    monkeypatch.setattr(data_center, "_sleep", lambda delay: sleeps.append(delay))
+    monkeypatch.setattr(data_center, "_jitter", lambda _lower, _upper: 0)
+    client = DataCenterClient(
+        Config(base_url="https://confluence.example.com/confluence", retries=3),
+        api=FlakyApi(),  # type: ignore[arg-type]
+    )
+
+    page = client.get_page("123")
+
+    assert page.page_id == "123"
+    assert client.retries == 2
+    assert sleeps == [0.5, 1.0]
+
+
+def test_retry_honors_retry_after_header(monkeypatch) -> None:
+    sleeps: list[float] = []
+
+    class RateLimitedApi(FakeAtlassianConfluence):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rate_limited = True
+
+        def get_page_by_id(self, page_id: str, expand: str):
+            if self.rate_limited:
+                self.rate_limited = False
+                response = requests.Response()
+                response.status_code = 429
+                response.headers["Retry-After"] = "1"
+                exc = requests.HTTPError("rate limited")
+                exc.response = response
+                raise exc
+            return super().get_page_by_id(page_id, expand)
+
+    monkeypatch.setattr(data_center, "_sleep", lambda delay: sleeps.append(delay))
+    monkeypatch.setattr(data_center, "_jitter", lambda _lower, _upper: 0)
+    client = DataCenterClient(
+        Config(base_url="https://confluence.example.com/confluence", retries=3),
+        api=RateLimitedApi(),  # type: ignore[arg-type]
+    )
+
+    page = client.get_page("123")
+
+    assert page.page_id == "123"
+    assert client.retries == 1
+    assert sleeps == [1.0]
+
+
+def test_auth_error_does_not_retry(monkeypatch) -> None:
+    sleeps: list[float] = []
+    client = DataCenterClient(
+        Config(base_url="https://confluence.example.com/confluence", retries=3),
+        api=FakeAtlassianConfluence(),  # type: ignore[arg-type]
+    )
+    response = requests.Response()
+    response.status_code = 401
+    exc = requests.HTTPError("Unauthorized")
+    exc.response = response
+
+    monkeypatch.setattr(data_center, "_sleep", lambda delay: sleeps.append(delay))
+
+    with pytest.raises(PullError) as exc_info:
+        client._call(lambda: (_ for _ in ()).throw(exc))
+
+    assert exc_info.value.code == "ERR_AUTH_REQUIRED"
+    assert client.retries == 0
+    assert sleeps == []
+
+
+def test_connection_error_retry_exhaustion_has_retry_count(monkeypatch) -> None:
+    sleeps: list[float] = []
+    client = DataCenterClient(
+        Config(base_url="https://confluence.example.com/confluence", retries=2),
+        api=FakeAtlassianConfluence(),  # type: ignore[arg-type]
+    )
+
+    monkeypatch.setattr(data_center, "_sleep", lambda delay: sleeps.append(delay))
+    monkeypatch.setattr(data_center, "_jitter", lambda _lower, _upper: 0)
+
+    with pytest.raises(PullError) as exc_info:
+        client._call(lambda: (_ for _ in ()).throw(requests.ConnectionError("dead host")))
+
+    assert exc_info.value.code == "ERR_IO_CONNECTION"
+    assert client.retries == 2
+    assert sleeps == [0.5, 1.0]
+    assert exc_info.value.details["retries_attempted"] == 2
+
+
 def test_data_center_client_fetches_paginated_footer_and_inline_comments() -> None:
     api = FakeAtlassianConfluence()
     client = DataCenterClient(Config(base_url="https://confluence.example.com/confluence"), api=api)  # type: ignore[arg-type]
@@ -246,6 +348,8 @@ def test_data_center_client_builds_bearer_token_auth(monkeypatch) -> None:
     )
 
     assert captured[-1]["token"] == "dc-pat"
+    assert captured[-1]["backoff_and_retry"] is False
+    assert "retry_status_codes" not in captured[-1]
     assert "username" not in captured[-1]
     assert "password" not in captured[-1]
 
