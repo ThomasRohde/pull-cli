@@ -196,6 +196,21 @@ def test_ssl_error_fails_fast_with_corporate_ca_hint() -> None:
     assert "certificate verify failed" in exc_info.value.details["reason"]
 
 
+def test_tls_setup_os_error_fails_fast_with_tls_code() -> None:
+    client = DataCenterClient(
+        Config(base_url="https://confluence.example.com/confluence"),
+        api=FakeAtlassianConfluence(),  # type: ignore[arg-type]
+    )
+    tls_error = OSError("Could not find a suitable TLS CA certificate bundle")
+
+    with pytest.raises(PullError) as exc_info:
+        client._call(lambda: (_ for _ in ()).throw(tls_error))
+
+    assert exc_info.value.code == "ERR_TLS_VERIFY"
+    assert exc_info.value.retryable is False
+    assert "TLS CA certificate bundle" in exc_info.value.details["reason"]
+
+
 def test_data_center_client_fetches_paginated_footer_and_inline_comments() -> None:
     api = FakeAtlassianConfluence()
     client = DataCenterClient(Config(base_url="https://confluence.example.com/confluence"), api=api)  # type: ignore[arg-type]

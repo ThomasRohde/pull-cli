@@ -395,6 +395,109 @@ def test_ssl_verify_false_suppresses_urllib3_warning(monkeypatch) -> None:
     assert called["category"] is urllib3.exceptions.InsecureRequestWarning
 
 
+@pytest.mark.parametrize(
+    ("filename", "content", "expected_message"),
+    [
+        ("empty-ca.pem", "", "CA bundle is empty"),
+        ("not-ca.pem", "not a certificate\n", "CA bundle contains no certificates"),
+    ],
+)
+def test_invalid_ca_bundle_fails_fast_without_output(
+    capsys,
+    monkeypatch,
+    tmp_path: Path,
+    filename: str,
+    content: str,
+    expected_message: str,
+) -> None:
+    ca_bundle = tmp_path / filename
+    ca_bundle.write_text(content, encoding="utf-8")
+    output = tmp_path / "out"
+
+    def fail_build_client(_config):
+        raise AssertionError("invalid CA bundle should fail before client creation")
+
+    monkeypatch.setattr(cli, "build_client", fail_build_client)
+
+    assert (
+        main(
+            [
+                "--page-id",
+                "123",
+                "--base-url",
+                "https://example.atlassian.net/wiki",
+                "--ssl-verify",
+                str(ca_bundle),
+                "--json",
+                "-o",
+                str(output),
+            ]
+        )
+        == 50
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert captured.err == ""
+    assert payload["ok"] is False
+    assert payload["errors"][0]["code"] == "ERR_TLS_VERIFY"
+    assert expected_message in payload["errors"][0]["message"]
+    assert payload["errors"][0]["retryable"] is False
+    assert payload["errors"][0]["details"]["path"] == str(ca_bundle)
+    assert not output.exists()
+
+
+def test_valid_ca_bundle_path_is_preserved_without_truststore(
+    capsys,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    page = make_page("910", "CLI CA", body_view="<h1>CLI CA</h1>")
+    client = FakeConfluenceClient(pages={"910": page})
+    ca_bundle = tmp_path / "corp-ca.pem"
+    ca_bundle.write_text(
+        "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n",
+        encoding="utf-8",
+    )
+    captured_config = {}
+    truststore_calls = []
+
+    def build_client(config):
+        captured_config["config"] = config
+        return client
+
+    monkeypatch.setattr(cli, "build_client", build_client)
+    monkeypatch.setattr(cli, "_TRUSTSTORE_INJECTED", False)
+    monkeypatch.setitem(
+        sys.modules,
+        "truststore",
+        SimpleNamespace(inject_into_ssl=lambda: truststore_calls.append("inject")),
+    )
+
+    assert (
+        main(
+            [
+                "--page-id",
+                "910",
+                "--base-url",
+                "https://example.atlassian.net/wiki",
+                "--ssl-verify",
+                str(ca_bundle),
+                "--json",
+                "-o",
+                str(tmp_path / "valid-ca"),
+                "--clean",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert captured_config["config"].ssl_verify == str(ca_bundle)
+    assert truststore_calls == []
+
+
 def test_default_ssl_verify_enables_system_truststore(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(cli, "_TRUSTSTORE_INJECTED", False)

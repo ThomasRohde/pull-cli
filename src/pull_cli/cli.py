@@ -11,7 +11,7 @@ from . import __version__
 from .clients import build_client
 from .config import resolve_config
 from .envelope import emit_json, make_envelope, wants_json
-from .errors import EXIT_INTERNAL, EXIT_SUCCESS, EXIT_VALIDATION, PullError
+from .errors import EXIT_INTERNAL, EXIT_IO, EXIT_SUCCESS, EXIT_VALIDATION, PullError
 from .extractor import extract
 from .guide import guide_payload
 from .models import PullOptions, TargetSelection
@@ -95,6 +95,7 @@ def _main_pull(argv: Sequence[str]) -> int:
         ssl_verify=ns.ssl_verify,
         config_path=ns.config,
     )
+    config.ssl_verify = _validate_ssl_verify_path(config.ssl_verify)
     _enable_system_trust_store(config.ssl_verify)
     _suppress_insecure_request_warnings(config.ssl_verify)
     selection = TargetSelection(
@@ -389,6 +390,53 @@ def _suppress_insecure_request_warnings(ssl_verify: bool | str) -> None:
     except Exception:  # noqa: BLE001
         return
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+def _validate_ssl_verify_path(ssl_verify: bool | str) -> bool | str:
+    if not isinstance(ssl_verify, str):
+        return ssl_verify
+    path = Path(ssl_verify).expanduser()
+    try:
+        stat = path.stat()
+    except OSError as exc:
+        raise _ca_bundle_error(
+            path,
+            "CA bundle path is not readable.",
+            reason=str(exc),
+        ) from exc
+    if not path.is_file():
+        raise _ca_bundle_error(path, "CA bundle path is not a file.")
+    if stat.st_size == 0:
+        raise _ca_bundle_error(path, "CA bundle is empty.")
+    try:
+        content = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError as exc:
+        raise _ca_bundle_error(
+            path,
+            "CA bundle path is not readable.",
+            reason=str(exc),
+        ) from exc
+    if "-----BEGIN CERTIFICATE-----" not in content:
+        raise _ca_bundle_error(path, "CA bundle contains no certificates.")
+    return str(path)
+
+
+def _ca_bundle_error(path: Path, message: str, *, reason: str | None = None) -> PullError:
+    details = {"path": str(path)}
+    if reason:
+        details["reason"] = reason
+    return PullError(
+        code="ERR_TLS_VERIFY",
+        message=f"{message} {path}",
+        exit_code=EXIT_IO,
+        retryable=False,
+        suggested_action=(
+            "Pass a readable PEM CA bundle containing one or more "
+            "-----BEGIN CERTIFICATE----- blocks, or omit --ssl-verify to use "
+            "default OS/Python trust."
+        ),
+        details=details,
+    )
 
 
 def _enable_system_trust_store(ssl_verify: bool | str) -> None:

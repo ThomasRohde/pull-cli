@@ -7,7 +7,7 @@
 The single source of truth is `src/pull_cli/__init__.py`:
 
 ```python
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 ```
 
 `pyproject.toml` reads that value dynamically through Hatch, and the CLI reports the same value through:

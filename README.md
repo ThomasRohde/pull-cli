@@ -127,7 +127,7 @@ Atlassian Cloud API tokens usually start with `ATAT` and require Basic auth with
 
 If a Data Center pull returns `ERR_AUTH_REQUIRED` while a direct request with `Authorization: Bearer <PAT>` succeeds, retry with `--auth bearer` or pass only `--token` and no explicit `--user`. If Basic auth is intended, pass `--auth basic --user <name> --token <token>`.
 
-TLS certificate failures fail fast with `ERR_TLS_VERIFY`. If your network inspects TLS and Python does not trust the corporate root CA, export that root to a PEM bundle and pass `--ssl-verify <path-to-corporate-ca-bundle>`. On Windows, the corporate root CA is often in the system store but not in `certifi`.
+TLS certificate failures fail fast with `ERR_TLS_VERIFY`. If your network inspects TLS and Python does not trust the corporate root CA, export that root to a PEM bundle and pass `--ssl-verify <path-to-corporate-ca-bundle>`. Empty, unreadable, or non-certificate bundle files are rejected before network access. On Windows, the corporate root CA is often in the system store but not in `certifi`.
 
 When `--ssl-verify false` is used intentionally, `pull` suppresses urllib3 `InsecureRequestWarning` so JSON mode remains parseable on stdout.
 

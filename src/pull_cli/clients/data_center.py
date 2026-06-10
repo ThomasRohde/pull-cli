@@ -66,18 +66,7 @@ class DataCenterClient:
         try:
             return operation(*args, **kwargs)
         except requests.exceptions.SSLError as exc:
-            raise PullError(
-                code="ERR_TLS_VERIFY",
-                message="TLS verification failed while contacting Confluence.",
-                exit_code=EXIT_IO,
-                retryable=False,
-                suggested_action=(
-                    "If your network inspects TLS, pass --ssl-verify "
-                    "<path-to-corporate-ca-bundle>. On Windows, the corporate root CA "
-                    "is often in the system store but not in certifi."
-                ),
-                details={"reason": _exception_reason(exc)},
-            ) from exc
+            raise _tls_verify_error(exc) from exc
         except requests.Timeout as exc:
             raise PullError(
                 code="ERR_IO_TIMEOUT",
@@ -125,6 +114,10 @@ class DataCenterClient:
                 retryable=True,
                 details={"reason": _exception_reason(exc)},
             ) from exc
+        except OSError as exc:
+            if _is_tls_setup_error(exc):
+                raise _tls_verify_error(exc) from exc
+            raise
 
     def _auth_suggested_action(self, status: int | None) -> str:
         if (
@@ -405,6 +398,37 @@ def _status_code(exc: Exception) -> int | None:
 
 def _exception_reason(exc: Exception) -> str:
     return redact_text(str(exc))
+
+
+def _tls_verify_error(exc: Exception) -> PullError:
+    return PullError(
+        code="ERR_TLS_VERIFY",
+        message="TLS verification failed while contacting Confluence.",
+        exit_code=EXIT_IO,
+        retryable=False,
+        suggested_action=(
+            "If your network inspects TLS, pass --ssl-verify "
+            "<path-to-corporate-ca-bundle>. On Windows, the corporate root CA "
+            "is often in the system store but not in certifi."
+        ),
+        details={"reason": _exception_reason(exc)},
+    )
+
+
+def _is_tls_setup_error(exc: OSError) -> bool:
+    reason = str(exc).lower()
+    return any(
+        term in reason
+        for term in (
+            "ca bundle",
+            "cafile",
+            "capath",
+            "certificate",
+            "certifi",
+            "ssl",
+            "tls",
+        )
+    )
 
 
 def _error_details(exc: Exception) -> dict[str, object]:

@@ -83,7 +83,7 @@ def guide_payload() -> dict[str, object]:
             "compat_env": "CONFPUB_USER remains a compatibility fallback for Basic auth, but it does not override an explicit token-only CLI invocation.",
             "ssl_verify_default": "With default verification, pull attempts to use the operating system trust store through truststore before falling back to the normal Python/requests stack.",
             "ssl_verify_false": "--ssl-verify false intentionally disables certificate verification and suppresses urllib3 InsecureRequestWarning output.",
-            "ssl_verify_ca_bundle": "If a corporate TLS inspection root CA is not trusted by Python, pass --ssl-verify <path-to-corporate-ca-bundle>.",
+            "ssl_verify_ca_bundle": "If a corporate TLS inspection root CA is not trusted by Python, pass --ssl-verify <path-to-corporate-ca-bundle>. Empty, unreadable, or non-certificate bundle files fail fast with ERR_TLS_VERIFY before network access.",
         },
         "cloud": {
             "page_body": "Cloud page pulls use the v2 page storage endpoint first and do not require the v1 rendered-body expansion when v2 storage is available.",
@@ -166,6 +166,7 @@ def guide_payload() -> dict[str, object]:
             ],
             "ERR_TLS_VERIFY": [
                 "If your network inspects TLS, export the corporate root CA to a PEM bundle and pass --ssl-verify <path-to-corporate-ca-bundle>.",
+                "The CA bundle path must be a readable PEM file containing at least one -----BEGIN CERTIFICATE----- block.",
                 "On Windows, corporate roots are often trusted by the OS but absent from certifi.",
                 "Use --ssl-verify false only for controlled testing where disabling certificate verification is acceptable.",
             ],
