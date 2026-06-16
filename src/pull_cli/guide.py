@@ -71,6 +71,11 @@ def guide_payload() -> dict[str, object]:
             "manifest_paths": "Manifest and AI manifest paths are package-root-relative. Resolve them against the directory containing the root AI Markdown/YAML file, not the shell current working directory.",
             "bundle_links": "Local links in bundle.md are rebased to package-root-relative paths.",
             "comments": "--comments is opt-in. It fetches page and inline comments, writes page-local comments.md sidecars only when comments exist, and links them from agent-facing navigation.",
+            "asset_policy": {
+                "visible": 'Default. Downloads rendered images, visible attachment links, file macros, rendered diagram images where discoverable, and storage inline attachment images such as <ac:image><ri:attachment ri:filename="..."> without downloading residual page attachments.',
+                "page": "Downloads all page attachments.",
+                "all": "Includes visible/referenced assets plus all page attachments and macro-listed files where discoverable.",
+            },
         },
         "auth": {
             "mode_default": "auto",

@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-06-16
+
+### Fixed
+- `--assets visible` now includes inline Confluence storage images backed by page attachments while still excluding unrelated residual attachments.
+
 ## [1.0.0] - 2026-06-10
 
 ### Added
@@ -71,6 +76,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Macro conversion registry and storage macro parsing across platforms.
 - Package validation and JSON envelope output.
 
+[1.0.1]: https://github.com/ThomasRohde/pull-cli/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/ThomasRohde/pull-cli/compare/v0.2.3...v1.0.0
 [0.2.3]: https://github.com/ThomasRohde/pull-cli/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/ThomasRohde/pull-cli/compare/v0.2.1...v0.2.2

@@ -383,6 +383,69 @@ def test_asset_filenames_with_spaces_and_parentheses_validate(tmp_path: Path) ->
     assert validate_package(output).ok
 
 
+def test_visible_assets_include_storage_attachment_images_without_residuals(tmp_path: Path) -> None:
+    output = tmp_path / "storage-visible-image"
+    page = make_page(
+        "170",
+        "Storage Visible Image",
+        body_view="<h1>Storage Visible Image</h1><p>Team topology</p>",
+        storage="""
+        <root xmlns:ac="http://atlassian.com/content" xmlns:ri="http://atlassian.com/resource/identifier">
+          <p>Team topology</p>
+          <p><ac:image ac:width="888"><ri:attachment ri:filename="diagram.png" /></ac:image></p>
+        </root>
+        """,
+    )
+    diagram = AttachmentRecord(
+        attachment_id="att-diagram",
+        page_id="170",
+        filename="diagram.png",
+        media_type="image/png",
+        download_url="/download/attachments/170/diagram.png",
+    )
+    residual = AttachmentRecord(
+        attachment_id="att-residual",
+        page_id="170",
+        filename="residual.png",
+        media_type="image/png",
+        download_url="/download/attachments/170/residual.png",
+    )
+    client = FakeConfluenceClient(
+        pages={"170": page},
+        attachments={"170": [diagram, residual]},
+        downloads={
+            "/download/attachments/170/diagram.png": b"diagram-bytes",
+            "/download/attachments/170/residual.png": b"residual-bytes",
+        },
+    )
+
+    result = extract(
+        client=client,
+        root=PageSummary(page_id="170", title="Storage Visible Image"),
+        options=PullOptions(output=output, force=True, output_mode="full"),
+    )
+
+    assert [asset.filename for asset in result.assets] == ["diagram.png"]
+    assert result.assets[0].role == "visible-storage-image"
+    assert result.assets[0].references[0].html_attribute == "storage:ri:attachment"
+    assert (output / result.assets[0].local_path).exists()
+    assert not (output / "pages" / "0001-storage-visible-image" / "assets" / "residual.png").exists()
+    markdown = read(output / result.pages[0].index_md)
+    assert "## Attachments" in markdown
+    assert "assets/diagram.png" in markdown
+    assert "residual.png" not in markdown
+    manifest = yaml.safe_load((output / "manifest.yaml").read_text(encoding="utf-8"))
+    assert [asset["filename"] for asset in manifest["assets"]] == ["diagram.png"]
+    assert validate_package(output).ok
+
+    page_result = extract(
+        client=client,
+        root=PageSummary(page_id="170", title="Storage Visible Image"),
+        options=PullOptions(output=tmp_path / "storage-page-assets", force=True, asset_policy="page"),
+    )
+    assert [asset.filename for asset in page_result.assets] == ["diagram.png", "residual.png"]
+
+
 def test_redact_source_urls_applies_to_page_json_html_and_source(tmp_path: Path) -> None:
     output = tmp_path / "redacted"
     page = make_page(

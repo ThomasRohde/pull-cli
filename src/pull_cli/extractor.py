@@ -101,6 +101,7 @@ def extract(
             page_id=page.page_id,
             attachments=attachments,
             options=options,
+            storage=page.body_storage,
         )
         progress.emit("assets", f"download start page={page.page_id} candidates={len(candidates)}")
         assets, asset_warnings = download_assets(

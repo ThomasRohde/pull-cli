@@ -33,6 +33,7 @@ def discover_asset_candidates(
     page_id: str,
     attachments: list[AttachmentRecord],
     options: PullOptions,
+    storage: str | None = None,
 ) -> list[AssetCandidate]:
     if options.no_assets:
         return []
@@ -65,6 +66,19 @@ def discover_asset_candidates(
         attachment = attachment_by_url.get(_normalize_url(href)) or attachment_by_name.get(filename.lower())
         if attachment or ATTACHMENT_PATH_RE.search(href):
             _add_candidate(candidates, seen, AssetCandidate(href, "linked-attachment", "href", attachment, filename))
+
+    for attachment in _storage_image_attachments(storage, attachment_by_name):
+        _add_candidate(
+            candidates,
+            seen,
+            AssetCandidate(
+                attachment.download_url or attachment.web_url or attachment.filename,
+                "visible-storage-image",
+                "storage:ri:attachment",
+                attachment,
+                attachment.filename,
+            ),
+        )
 
     if options.asset_policy in {"page", "all"}:
         for attachment in attachments:
@@ -216,6 +230,46 @@ def _normalize_url(url: str | None) -> str:
         return ""
     parsed = urlsplit(url)
     return unquote(parsed.path).lower()
+
+
+def _storage_image_attachments(
+    storage: str | None,
+    attachment_by_name: dict[str, AttachmentRecord],
+) -> list[AttachmentRecord]:
+    if not storage:
+        return []
+    soup = BeautifulSoup(storage, "lxml")
+    output: list[AttachmentRecord] = []
+    seen: set[str] = set()
+    for image in soup.find_all(_tag_local_name_matches("image")):
+        attachment = image.find(_tag_local_name_matches("attachment"))
+        if attachment is None:
+            continue
+        filename = _tag_attr(attachment, "ri:filename", "filename")
+        if not filename:
+            continue
+        record = attachment_by_name.get(filename.lower())
+        if record is None or record.attachment_id in seen:
+            continue
+        seen.add(record.attachment_id)
+        output.append(record)
+    return output
+
+
+def _tag_local_name_matches(local_name: str):
+    def predicate(tag) -> bool:
+        name = getattr(tag, "name", "")
+        return isinstance(name, str) and name.split(":")[-1].lower() == local_name
+
+    return predicate
+
+
+def _tag_attr(tag, *names: str) -> str | None:
+    for name in names:
+        value = tag.get(name)
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def _is_external(url: str) -> bool:

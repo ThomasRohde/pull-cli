@@ -147,7 +147,7 @@ Retries are bounded and owned by pull-cli. Retryable connection errors, timeouts
 
 The extractor uses a macro adapter registry. Current adapters cover panels/admonitions, code/noformat, status, expand, tabs, layout flattening, TOC placeholders, children/page tree links when in scope, include/excerpt placeholders or inline source when available, attachments, displayed files, Jira placeholders, diagram snapshots, dynamic snapshots, HTML macro sanitization, and unknown macro placeholders.
 
-Asset policy defaults to `visible`: rendered images, visible attachment links, file macros, and rendered diagram images where discoverable. `--assets page` downloads all page attachments. `--assets all` includes visible/referenced assets plus all page attachments and macro-listed files where discoverable. `--no-assets` skips downloads and preserves source links with warnings.
+Asset policy defaults to `visible`: rendered images, storage inline attachment images such as `<ac:image><ri:attachment ri:filename="...">`, visible attachment links, file macros, and rendered diagram images where discoverable. `--assets page` downloads all page attachments. `--assets all` includes visible/referenced assets plus all page attachments and macro-listed files where discoverable. `--no-assets` skips downloads and preserves source links with warnings.
 
 Local links to pages in the pulled tree are rewritten to relative `index.md` paths. Downloaded asset links are rewritten to local files. External, mailto, Jira, and out-of-scope Confluence links are preserved. Same-page anchors are normalized where possible; unresolved anchors become diagnostics.
 
